@@ -29,7 +29,7 @@
       <button data-nav="generator">Генератор</button><button data-nav="seeds">База примеров <span id="seed-count">0</span></button>
       <button data-nav="history">История</button><button data-nav="settings">Настройки</button><button data-nav="data">Данные</button>
     </nav>
-    <div class="sidebar-bottom"><span class="dot"></span> Данные на этом устройстве<a href="#" data-export>Резервная копия ↓</a><small>PromptLab HTML 0.6.0</small></div>
+    <div class="sidebar-bottom"><span class="dot"></span> Данные на этом устройстве<a href="#" data-export>Резервная копия ↓</a><small>PromptLab HTML 0.7.0</small></div>
   </aside>
   <main><header><button id="menu-toggle" class="small" aria-label="Открыть меню" aria-controls="side-nav" aria-expanded="false">☰</button><div><div class="eyebrow">WORKSPACE / PROMPT ENGINEERING</div><h1 id="page-title">Генератор</h1></div><div class="row"><button class="small" id="refresh">Обновить</button><span class="status" id="connection">Подключение</span></div></header><section id="storage-banner" class="notice storage-notice" role="status" hidden></section><div id="app" aria-live="polite"></div></main>
   <div id="toast" role="status" hidden></div>
@@ -397,183 +397,259 @@ const exports={...base,Engine:WorkflowEngine,WorkflowEngine,buildContext,validat
 </script><script>
 "use strict";
 (function(root){
-const base=root.PromptLab||(typeof require==='function'?require('./workflow.js'):null);
-const VERSION='rules-1';
-const clone=x=>JSON.parse(JSON.stringify(x));
-const norm=text=>String(text||'').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
-const words=text=>new Set(norm(text).split(' ').filter(w=>w.length>3));
-function overlap(a,b){const aa=words(a),bb=words(b);return aa.size?[...aa].filter(w=>bb.has(w)).length/aa.size:0;}
-const FEATURES=[
- {id:'contract',name:'Формат результата',rx:/формат|результат|deliverable|output|contract|json|schema/iu},
- {id:'steps',name:'Этапы работы',rx:/этап|шаг|последователь|раздели|step|decompos|staged/iu},
- {id:'verification',name:'Проверка требований',rx:/провер|критери|тест|check|validat|verif|test/iu},
- {id:'examples',name:'Примеры',rx:/пример|образец|example|sample|demonstrat/iu},
- {id:'continuity',name:'Продолжение разговора',rx:/продолж|следующ|контекст|диалог|follow.up|continu|subsequent|conversation/iu},
- {id:'constraints',name:'Ограничения',rx:/огранич|обязател|не допуска|без |must|constraint|without|required/iu},
- {id:'compare',name:'Сопоставление вариантов',rx:/сравн|вариант|альтернатив|compar|alternative|trade.off/iu},
- {id:'clarity',name:'Уточнение условий',rx:/уточн|неоднознач|допущени|clarif|ambigu|assumption/iu}
+const core=root.PromptLab||(typeof require==='function'?require('./engine.js'):null);
+const hash=text=>core.sha256(String(text));
+const dims=['interpret','method','check','continuity','frame','skin'];
+const structural=dims.filter(x=>x!=='skin');
+const make=(slot,id,label,text,tags=[])=>({id:slot+':'+id,slot,label,text,tags,source_id:null});
+const lists={
+ interpret:[
+  ['contract','Контракт результата','Определи входные данные, требуемый результат, обязательные ограничения и признаки готовности. Используй только условия текущей задачи; свои допущения отмечай отдельно.',['constraints','format']],
+  ['dependencies','Зависимости','Разбери запрос на результаты, которые зависят друг от друга. Установи порядок получения исходных данных и зависимых частей, сохраняя общую цель.',['steps','coding']],
+  ['criteria','Критерии','Сформулируй наблюдаемые критерии выполнения непосредственно из запроса. Раздели обязательные условия и пожелания; конфликт обязательных условий обозначь явно.',['verification','constraints']],
+  ['inputs','Проверка исходных данных','Проверь, каких данных достаточно для выполнения, какие отсутствуют и какие можно получить из самого запроса. Задавай уточняющий вопрос только о факте, без которого результат меняется существенно.',['clarity','analysis']],
+  ['artifact','Модель результата','Определи состав итогового артефакта: части, связи между ними и формат передачи. Каждая часть должна быть нужна для запрошенного результата.',['format','coding']]
+ ],
+ method:[
+  ['direct','Прямое выполнение','Создай полный результат по условиям запроса. Объяснения используй для обоснования конкретных решений; они не заменяют сам результат.',['writing']],
+  ['staged','Этапы и сборка','Получай промежуточные результаты в порядке зависимостей. Затем соедини их и проверь совместимость входов, выходов, терминов и предположений. Верни законченное целое.',['steps','coding','planning']],
+  ['alternatives','Сравнение решений','Сопоставь два содержательно разных решения по критериям пользователя. Кратко укажи различие, выбери подходящее и выполни его полностью. Не выдавай список вариантов вместо выполненной задачи.',['compare','analysis']],
+  ['example','От примера к решению','Разбери минимальный конкретный случай, который сохраняет существенные условия задачи. Распространи решение на весь запрос; итог должен покрывать полный объём, а не один пример.',['examples','writing']],
+  ['invariants','Сохранение условий','При построении каждой части результата проверяй неизменные условия исходного запроса. Если очередной шаг нарушает условие, измени этот шаг до продолжения.',['constraints','coding']],
+  ['revision','Черновик и исправления','Построй полный рабочий вариант, найди конкретные пропуски относительно задачи и исправь их. Пользователю передай итоговый вариант и необходимые пояснения, а не последовательность внутренних черновиков.',['verification','writing']],
+  ['evidence','Опора на данные','Свяжи каждое существенное решение с доступным фактом, условием задачи или явно обозначенным допущением. Не подставляй вымышленные источники и измерения. Затем представь законченный результат.',['analysis']]
+ ],
+ check:[
+  ['coverage','Покрытие требований','Сверь итог с каждым обязательным требованием. Для обнаруженного пропуска укажи конкретное место и исправь его до ответа.',['constraints','verification']],
+  ['boundaries','Граничные случаи','Проверь обычный, граничный и некорректный вход, если это применимо. Различай фактическое испытание и мысленную проверку; не заявляй о запуске без запуска.',['coding','verification']],
+  ['consistency','Согласованность','Проверь результат на внутренние противоречия: определения, значения, порядок действий, форматы и зависимости должны согласовываться между частями.',['analysis','verification']],
+  ['counterexample','Контрпример','Попробуй найти конкретный случай, при котором ответ не выполняет запрос. Исправь найденную проблему или явно обозначь условие применимости результата.',['compare','verification']],
+  ['format','Формат и полнота','Проверь именно формат, заданный пользователем: обязательные части, полноту содержимого и пригодность к использованию. Наличие заголовка или обещания не означает наличия результата.',['format']],
+  ['trace','Проверяемость','Отдели фактически подтверждённые результаты от оценок. Укажи, что именно подтверждает итог и какие проверки ещё не выполнены, если это существенно для его применения.',['analysis','verification']]
+ ],
+ continuity:[
+  ['state','Состояние разговора','На каждом следующем ходе сохраняй действующие условия задачи и уже установленные факты. Новый запрос меняет только явно изменённые условия. Не приписывай разговору отсутствующие договорённости.',['continuity']],
+  ['delta','Изменения результата','На продолжениях сначала определи, какую часть результата меняет новый запрос. Обнови её, сохрани рабочие части и проверь, не нарушены ли связи с остальными частями.',['continuity','coding']],
+  ['ledger','Решения и открытые вопросы','Учитывай принятые решения и нерешённые вопросы отдельно. Закрывай вопрос только после получения нужных данных; при противоречии новому запросу пересматривай затронутое решение.',['continuity','planning']],
+  ['revalidate','Повторная проверка','Для каждого нового задания заново проверь его конкретные условия вместе с общими правилами разговора. Прежнее согласие не считается выполнением нового задания.',['continuity','verification']],
+  ['context','Восстановление контекста','Если для продолжения не хватает части истории, точно назови недостающий фрагмент. Сохраняй доступные сведения, не придумывая отсутствующие детали.',['continuity','clarity']]
+ ],
+ frame:[
+  ['brief','Рабочая постановка','Работай по следующей постановке. Эти правила определяют порядок обработки последующих запросов в данном разговоре.',[]],
+  ['spec','Спецификация исполнения','Ниже описаны задача, процедура выполнения и условия проверки. Применяй их совместно к каждому содержательному запросу.',['format']],
+  ['session','Сессия работы','Этот разговор посвящён указанной задаче. Сохраняй её условия при подготовке результата и последующих исправлениях.',['continuity']],
+  ['review','Подготовка и проверка','Организуй работу как подготовку результата с последующей проверкой его соответствия исходным условиям.',['verification']]
+ ],
+ skin:[
+  ['plain','Прямое изложение','Пиши на языке запроса, конкретно и последовательно. Если формат не задан, сначала покажи результат, затем необходимые пояснения. Не добавляй вступление только ради вступления.',[]],
+  ['document','Документ','Если пользователь не задал другой формат, оформи итог как самостоятельный документ с короткими содержательными заголовками. Каждый раздел должен содержать результат, а не обещание работы.',['writing']],
+  ['technical','Техническое изложение','Используй точные названия сущностей и явно обозначай зависимости. При отсутствии заданного формата отделяй готовый результат, условия применения и существенные проверки.',['coding']],
+  ['compact','Краткое изложение','При отсутствии требований к объёму используй короткие абзацы и списки только для параллельных пунктов. Сокращай повторения, сохраняя все обязательные части результата.',[]],
+  ['explanation','Объяснение через примеры','Если формат допускает пояснения, объясняй нетривиальные части на конкретном примере. Пример должен пояснять полный ответ, не подменяя его.',['examples']]
+ ]};
+const builtin=Object.fromEntries(dims.map(slot=>[slot,lists[slot].map(x=>make(slot,...x))]));
+const slotNames={interpret:'Разбор задачи',method:'Порядок выполнения',check:'Проверка',continuity:'Продолжение',frame:'Контекст',skin:'Оформление'};
+const classify=[
+ ['continuity',/продолж|следующ.{0,15}(запрос|сообщен|ход)|контекст.{0,15}разговор|follow.up|subsequent|conversation state/iu],
+ ['check',/провер|критери|валидац|check|validat|verif|test/iu],
+ ['skin',/стиль|тон |оформ|излаг|пиши |write in|tone|style|presentation/iu],
+ ['interpret',/услови|огранич|входн|требован|constraint|requirement|input|specification/iu],
+ ['method',/этап|шаг|порядок|алгоритм|сначала|step|procedure|first|then|method/iu],
+ ['frame',/роль|сценари|контекст|представ|персонаж|role|scenario|imagine|context/iu]
 ];
-const CATEGORIES=[
- {id:'coding',name:'Программирование',rx:/код|программ|функци|браузер|алгоритм|скрипт|сайт|html|javascript|python|typescript|sql|api|code|software|function/giu},
- {id:'writing',name:'Тексты',rx:/стать|рассказ|сценар|роман|письм|редакт|перепиш|стих|write|story|article|essay|draft/giu},
- {id:'analysis',name:'Анализ',rx:/анализ|сравн|исслед|данны|таблиц|статист|объясн|analy|compar|research|dataset|explain/giu},
- {id:'planning',name:'Планирование',rx:/план|расписан|маршрут|бюджет|проект|срок|plan|schedule|roadmap|budget/giu}
-];
-function facts(objective,domain='general'){
- const clauses=objective.split(/\n+|(?<=[.!?;])\s+/u).map(x=>x.trim()).filter(Boolean);
- const scored=CATEGORIES.map(c=>({id:c.id,name:c.name,score:[...objective.matchAll(new RegExp(c.rx))].length})).sort((a,b)=>b.score-a.score);
- const explicit=CATEGORIES.find(c=>c.id===domain),category=explicit?{id:explicit.id,name:explicit.name,source:'category_field'}:scored[0].score?{...scored[0],source:'keyword_rules'}:{id:'general',name:'Общая задача',source:'fallback'};
- const constraintClauses=clauses.filter(x=>/(?:без|нельзя|только|долж|необходим|обязател|не\s+|must|without|required|only|do not)/iu.test(x));
- return {objective,category,clauses:clauses.slice(0,100),constraint_clauses:constraintClauses.slice(0,60),constraint_count:constraintClauses.length,features:FEATURES.filter(f=>f.rx.test(objective)).map(f=>f.id),long:objective.length>1500};
+const placeholders=/\{\{\s*([a-zA-Z_][a-zA-Z_0-9]*)\s*\}\}/g;
+function resolve(text,c){return text.replace(placeholders,(whole,key)=>({objective:c.objective,task:c.objective,persona:c.persona||'Ассистент',domain:c.domain,language:'русский'}[key]??whole));}
+function parseSeed(seed){
+ const original=String(seed.text||'');let pieces=[];
+ try{const parsed=JSON.parse(original);if(Array.isArray(parsed.blocks))pieces=parsed.blocks.map(b=>({text:String(b.text||''),slot:b.kind==='skin'?'skin':null}));}catch{}
+ if(!pieces.length){const sections=original.split(/\n\s*\n/);pieces=sections.map(text=>({text,slot:null}));}
+ const result=[],excluded=[];
+ for(const [index,piece] of pieces.entries()){
+  const text=piece.text.trim();if(!text)continue;
+  const unresolved=[...text.matchAll(placeholders)].map(m=>m[1]).filter(k=>!['objective','task','persona','domain','language'].includes(k));
+  if(text.length>20000){excluded.push({index,reason:'Фрагмент длиннее 20 000 символов'});continue;}
+  if(unresolved.length){excluded.push({index,reason:'Неизвестные переменные: '+[...new Set(unresolved)].join(', ')});continue;}
+  if(pieces.length>1&&/(?:см\.|see)\s+(?:пункт|раздел|section)|как (указано|описано) выше|as described above/iu.test(text)){excluded.push({index,reason:'Фрагмент ссылается на другую часть исходника'});continue;}
+  const slot=piece.slot||classify.find(x=>x[1].test(text))?.[0]||'frame';
+  result.push({id:'seed:'+hash(seed.id+'\n'+text).slice(0,20),slot,label:seed.title+' · '+(index+1),text,tags:[...(seed.domains||[])],source_id:seed.id,source_hash:hash(original),origin:'user_reference',classification:'heuristic',index});
+ }
+ return {id:seed.id,title:seed.title,fragments:result,excluded};
 }
-const RECIPES=[
- {id:'contract',name:'Контракт результата',features:['contract','constraints'],base:8,categories:['coding','general'],procedure:[
- 'Преобразуй очередной запрос в контракт: что дано, что требуется получить, какие условия обязательны и как проверить результат.',
- 'Сопоставь каждое обязательное условие с конкретной частью будущего ответа. Отдели требования пользователя от своих допущений.',
- 'Выполни запрос в рамках этого контракта. Не заменяй готовый результат обещанием его подготовить.',
- 'Перед отправкой сравни результат с каждым пунктом контракта. Исправь пропуски; неизвестные данные обозначь явно.'
- ]},
- {id:'staged',name:'Последовательность зависимых этапов',features:['steps','clarity'],base:6,categories:['coding','planning'],procedure:[
- 'Раздели очередное задание на минимальные этапы с явными входами и выходами. Порядок должен следовать зависимостям, а не порядку упоминания в запросе.',
- 'Сначала выполни этапы, которые дают исходные данные остальным. Для каждого этапа зафиксируй короткий проверяемый промежуточный результат.',
- 'Соедини промежуточные результаты в единый законченный ответ. Проверь совместимость терминов, форматов и предположений между частями.',
- 'Если этап заблокирован отсутствующим фактом, назови этот факт и его влияние. Не заполняй пробел вымышленными сведениями.'
- ]},
- {id:'deliverable',name:'Результат с последующим аудитом',features:['contract','verification'],base:7,categories:['writing','coding'],procedure:[
- 'Начни содержательный ответ с самого запрошенного результата: готового текста, решения или артефакта.',
- 'После результата проведи отдельный аудит: какие условия запроса выполнены, где есть допущения и что требует внешней проверки.',
- 'Проверь аудит на несоответствия самому результату. Исправь найденные несоответствия до ответа пользователю.',
- 'Объяснения добавляй ровно в объёме, необходимом для применения результата. Описание намерений не заменяет выполненную работу.'
- ]},
- {id:'verification',name:'Критерии и проверочные случаи',features:['verification','examples'],base:5,categories:['coding','analysis'],procedure:[
- 'До выполнения сформулируй наблюдаемые критерии готовности, которые прямо следуют из запроса.',
- 'Выбери обычный случай, граничный случай и случай некорректных входных данных, если они применимы к задаче.',
- 'Создай решение и проверь его по этим случаям. Различай фактически выполненную проверку и мысленную проверку; не сообщай о запуске, которого не было.',
- 'Верни итоговое решение вместе с краткими результатами проверок, если запрошенный формат допускает пояснения.'
- ]},
- {id:'constraints',name:'Матрица требований',features:['constraints','contract'],base:5,categories:['planning','analysis'],procedure:[
- 'Составь перечень требований запроса. Раздели обязательные условия, пожелания и недостающие данные.',
- 'Проверь пары обязательных условий на противоречия. Если противоречие нельзя разрешить из текста, задай один точный вопрос о приоритете.',
- 'Построй ответ так, чтобы каждому обязательному условию соответствовал конкретный элемент результата.',
- 'В конце проверь покрытие требований и убери элементы, которые добавлены без необходимости и мешают указанному формату.'
- ]},
- {id:'examples',name:'Образец и обобщение',features:['examples','clarity'],base:4,categories:['writing','analysis'],procedure:[
- 'Выдели минимальный конкретный случай, который выражает суть очередного задания.',
- 'Построй для него небольшой законченный пример. Если пользователь дал образец, сохрани его существенные требования, а не случайные детали.',
- 'Обобщи решение с примера на весь объём запроса и покажи полноценный итог.',
- 'Проверь, где обобщение перестаёт работать. Не подменяй запрошенный результат одним демонстрационным фрагментом.'
- ]},
- {id:'comparison',name:'Сравнение двух решений',features:['compare','verification'],base:3,categories:['analysis','planning'],procedure:[
- 'Выдели критерии выбора, которые следуют из задачи: корректность, полнота, ресурсы или другие явно указанные условия.',
- 'Сопоставь два действительно разных способа решения по этим критериям. Дай краткие проверяемые основания, без подробного внутреннего рассуждения.',
- 'Выбери способ с лучшим соответствием обязательным условиям и выполни его полностью.',
- 'Проверь итог независимо от причин выбора. Отметь компромиссы, которые имеют значение для пользователя.'
- ]},
- {id:'continuity',name:'Состояние диалога и изменения',features:['continuity','steps'],base:4,categories:['general','coding'],procedure:[
- 'На каждом ходе отделяй новую задачу от уже согласованных условий и полученных результатов.',
- 'Определи, что изменяет новый запрос: цель, отдельную часть результата, формат или ограничение. Не сбрасывай остальные согласованные условия.',
- 'Выполни новое задание с учётом актуального состояния разговора. При исправлении сохраняй рабочие части предыдущего результата.',
- 'После выполнения коротко обозначь сделанное изменение и оставшиеся открытые вопросы, если формат ответа допускает пояснения. Не приписывай диалогу отсутствующие договорённости.'
- ]}
+function corpus(seeds,c){
+ seeds=seeds.filter(x=>x.enabled!==false);
+ const catalogs=Object.fromEntries(dims.map(d=>[d,builtin[d].map(x=>({...x}))])),parsed=seeds.map(parseSeed),stats=[];
+ const target=String(c.target_snapshot?.title||'').toLowerCase();
+ const ranked=parsed.map((p,index)=>({p,seed:seeds[index],rank:((seeds[index].domains||[]).includes(c.domain)?4:0)+(seeds[index].target_hint&&target.includes(seeds[index].target_hint.toLowerCase())?3:0),index})).sort((a,b)=>b.rank-a.rank||a.index-b.index);
+ const seen=new Set();
+ for(const {p} of ranked){let included=0;for(const f of p.fragments){const digest=hash(f.slot+'\n'+f.text);if(seen.has(digest)||catalogs[f.slot].length>=64)continue;seen.add(digest);catalogs[f.slot].push(f);included++;}stats.push({id:p.id,title:p.title,fragments:p.fragments.length,included,excluded:p.excluded});}
+ const fingerprint=hash(dims.map(d=>catalogs[d].map(x=>x.id+':'+hash(x.text)).join('|')).join('\n'));
+ return {catalogs,stats,fingerprint,total:seeds.length,included:stats.filter(x=>x.included).length};
+}
+function signature(genome){return structural.map(d=>genome[d]).join('|');}
+function distance(a,b){return structural.filter(d=>a[d]!==b[d]).length;}
+function lookup(grammar,genome){const out={};for(const d of dims){out[d]=grammar.catalogs[d].find(x=>x.id===genome[d]);if(!out[d])throw Error('Компонент отсутствует: '+d);}return out;}
+function variants(grammar){return dims.reduce((n,d)=>n*grammar.catalogs[d].length,1);}
+function decode(grammar,index){const g={};for(const d of dims){const choices=grammar.catalogs[d];g[d]=choices[index%choices.length].id;index=Math.floor(index/choices.length);}return g;}
+function render(grammar,genome,c){
+ const components=lookup(grammar,genome),blocks=[];let dependency=[];
+ function push(id,kind,text){blocks.push({id,kind,text,depends_on:[...dependency]});dependency=[id];}
+ push('frame','skeleton',resolve(components.frame.text,c));
+ push('task_spec','skeleton','Исходная задача:\n'+c.objective);
+ for(const d of ['interpret','method','check','continuity'])push(d,'skeleton',slotNames[d]+':\n'+resolve(components[d].text,c));
+ push('presentation','skin',resolve(components.skin.text,c)+'\nЯвные требования исходной задачи к формату имеют приоритет над общими рекомендациями.');
+ if(c.persona)push('persona','persona','Имя персоны в этом разговоре: '+c.persona+'.');
+ push('start','skeleton','Сейчас ответь, понятны ли задача и порядок работы. Конкретный запрос на выполнение будет отправлен следующим сообщением. Подтверждение само по себе не считается выполнением задания.');
+ return {blocks,components,references:[...new Set(Object.values(components).map(x=>x.source_id).filter(Boolean))]};
+}
+const api={dims,structural,slotNames,builtin,parseSeed,corpus,signature,distance,lookup,variants,decode,render,hash};root.PromptGrammar=api;if(typeof module!=='undefined'&&module.exports)module.exports=api;
+})(globalThis);
+
+</script><script>
+"use strict";
+(function(root){
+const norm=x=>String(x||'').normalize('NFKC').toLowerCase();
+const patterns=[
+ ['missing_input','Упоминание недостающих данных',/недостаточн.{0,30}(данн|информац)|уточните|missing (input|information)|need more (details|information)/iu],
+ ['conflict','Упоминание противоречия',/противореч|неоднознач|conflict|ambigui/iu],
+ ['length','Упоминание предела объёма',/слишком (длин|больш)|не помещ|лимит.{0,15}(контекст|токен)|too long|context.{0,15}(limit|length)/iu],
+ ['context_loss','Упоминание потери контекста',/не (помню|вижу).{0,35}(предыдущ|контекст)|забыл|lost.{0,15}context|previous.{0,25}(unavailable|missing)/iu],
+ ['declared_limit','Заявленное ограничение',/не могу (помочь|выполнить|предоставить)|не разреш|политик|cannot (help|assist|provide)|can't (help|assist)|policy|not allowed/iu]
 ];
-const SIGNALS=[
- {id:'missing_input',name:'В ответе упомянуты недостающие данные',rx:/недостаточн.{0,30}(данн|информац)|уточните|нужн.{0,20}(подробност|исходн)|missing (information|input)|need more (details|information)/iu,boost:{contract:4,staged:3}},
- {id:'conflict',name:'В ответе упомянута неоднозначность или конфликт',rx:/противореч|неоднознач|conflict|ambigui/iu,boost:{constraints:5,contract:2}},
- {id:'length',name:'В ответе упомянут предел объёма',rx:/слишком (длин|больш)|не помещ|лимит.{0,15}(контекст|токен)|too long|context.{0,15}(limit|length)/iu,boost:{staged:5,deliverable:3}},
- {id:'context_loss',name:'В ответе упомянута потеря контекста',rx:/не (помню|вижу).{0,35}(предыдущ|контекст)|забыл|lost.{0,15}context|previous.{0,25}(unavailable|missing)/iu,boost:{continuity:6}},
- {id:'declared_limit',name:'В ответе заявлено ограничение модели',rx:/не могу (помочь|выполнить|предоставить)|не разреш|политик|cannot (help|assist|provide)|can't (help|assist)|policy|not allowed/iu,boost:{}}
-];
-function diagnose(report){
- if(!report)return {stage:'none',outcome:null,signals:[],summary:'Завершённых испытаний в этом проекте ещё нет.'};
+function analyze(report){
+ if(!report)return {stage:'none',signals:[],summary:'В текущем проекте ещё нет завершённого испытания.',vector:{setup:null,task:null,followup:null},evidence:[]};
  const stage={setup_refusal:'setup',task_refusal:'task',followup_refusal:'followup',accepted:'none'}[report.outcome]||'unknown';
- const rejected=report.setup.decision==='refusal'?[{response:report.setup.response,turn:0}]:report.turns.map((t,i)=>({...t,turn:i+1})).filter(t=>t.decision==='refusal');
- const signals=[];
- for(const signal of SIGNALS){const item=rejected.find(t=>signal.rx.test(t.response));if(item){const match=signal.rx.exec(item.response),start=Math.max(0,match.index-45);signals.push({id:signal.id,name:signal.name,turn:item.turn,excerpt:item.response.slice(start,start+180),report_id:report.id});}}
- if(report.outcome==='accepted')return {stage,outcome:report.outcome,signals,summary:'Все внесённые задания отмечены пользователем как выполненные. Результат относится к сохранённым условиям проверки.'};
- const description={setup_refusal:'Отказ на начальный промпт.',task_refusal:'Начальный промпт принят, первое задание отклонено.',followup_refusal:'Отказ возник на продолжении разговора.',accepted:'Все внесённые задания отмечены пользователем как выполненные.'}[report.outcome];
- return {stage,outcome:report.outcome,signals,summary:description+' '+(signals.length?'В ответах найдены текстовые маркеры; они не доказывают причину отказа.':'Причина из текста автоматически не установлена.')};
+ const vector={setup:report.setup.decision==='accept'?1:0,task:report.turns.length?(report.turns[0].decision==='accept'?1:0):null,followup:report.turns.length>1?(report.turns.slice(1).every(t=>t.decision==='accept')?1:0):null};
+ const rejected=report.setup.decision==='refusal'?[{turn:0,response:report.setup.response}]:report.turns.map((t,i)=>({...t,turn:i+1})).filter(t=>t.decision==='refusal');
+ const signals=[];for(const [id,name,rx] of patterns){for(const t of rejected){const m=rx.exec(t.response);if(m){signals.push({id,name,report_id:report.id,turn:t.turn,excerpt:t.response.slice(Math.max(0,m.index-45),m.index+m[0].length+100),interpretation:'text_marker_only'});break;}}}
+ const summary={setup:'Отказ на начальный промпт.',task:'Начальный промпт принят, но первое задание отклонено.',followup:'Отказ возник на продолжении после первого задания.',none:'Внесённые задания отмечены как выполненные.'}[stage]||'Результат не определён.';
+ return {stage,signals,summary,vector,evidence:[{report_id:report.id,setup:report.setup.decision,turns:report.turns.map((t,i)=>({turn:i+1,decision:t.decision}))}]};
 }
-function seedFeatures(seed){return FEATURES.filter(f=>f.rx.test(seed.text||'')).map(f=>f.id);}
-function evidence(s,c){
- const complete=s.reports.filter(r=>r.status==='complete'&&r.target_id===c.target_id&&r.domain===c.domain);
- return complete.map(r=>{const objective=r.objective??s.campaigns.find(x=>x.id===r.campaign_id)?.objective??null;return {r,a:s.attempts.find(a=>a.id===r.attempt_id),objective,relation:objective===c.objective?'same_objective':objective?'different_objective':'unspecified_legacy_task'};});
+function records(state,c){return state.reports.filter(r=>r.status==='complete'&&r.target_id===c.target_id&&r.domain===c.domain).map(r=>{const a=state.attempts.find(x=>x.id===r.attempt_id),objective=r.objective??state.campaigns.find(x=>x.id===r.campaign_id)?.objective??null;return {report:r,attempt:a,objective,relation:objective===c.objective?'same_objective':objective?'different_objective':'unspecified_legacy_task',weight:objective===c.objective?1:objective?0.15:0,assessment:analyze(r)};});}
+function taskFacts(c){
+ const text=norm(c.objective),features=[];for(const [name,rx] of [['coding',/код|программ|html|javascript|python|typescript|function|code/],['writing',/текст|рассказ|стать|письм|story|article|essay/],['analysis',/анализ|сравн|исслед|данны|analysis|research|compare/],['planning',/план|расписан|срок|plan|schedule/],['constraints',/без |нельзя|долж|must|without|constraint/],['verification',/провер|тест|критери|test|check|verif/],['continuity',/продолж|следующ|диалог|follow.up|conversation/],['steps',/этап|шаг|step/],['examples',/пример|example/],['format',/формат|json|html|таблиц|format|table/],['clarity',/уточн|clarif/]])if(rx.test(text))features.push(name);
+ if(c.domain!=='general'&&!features.includes(c.domain))features.push(c.domain);
+ return {features,constraints:c.objective.split(/\n+|(?<=[.!?;])\s+/u).filter(x=>/без |нельзя|долж|не\s+|must|without|required|only/iu.test(x)).slice(0,50)};
 }
-function choose(s,c){
- const task=facts(c.objective,c.domain),reports=evidence(s,c),last=reports.find(x=>x.r.attempt_id===c.current_attempt_id),diagnosis=diagnose(last?.r);
- const references=s.seeds.map((seed,index)=>({id:seed.id,title:seed.title,features:seedFeatures(seed),domains:seed.domains||[],score:((seed.domains||[]).includes(c.domain)?3:0)+(seed.target_hint&&norm(c.target_snapshot.title).includes(norm(seed.target_hint))?2:0)+overlap(c.objective,[seed.title,seed.text,seed.notes].join(' ')),index})).filter(x=>x.features.length).sort((a,b)=>b.score-a.score||a.index-b.index).slice(0,24);
- const used=new Set(s.attempts.filter(a=>a.campaign_id===c.id&&a.provenance?.channel==='local').map(a=>a.strategy.id));
- const failed=new Set(reports.filter(x=>x.relation==='same_objective'&&x.r.outcome!=='accepted'&&x.a?.provenance?.channel==='local').map(x=>x.a.strategy.id));
- const ranking=RECIPES.map((recipe,index)=>{
-  let score=recipe.base;const reasons=[{rule:'base',points:recipe.base,detail:'Базовый приоритет структуры'}],add=(rule,points,detail)=>{score+=points;reasons.push({rule,points,detail});};
-  if(recipe.categories.includes(task.category.id))add('category',3,'Тип задачи: '+task.category.name);
-  const matched=recipe.features.filter(x=>task.features.includes(x));if(matched.length)add('task_markers',matched.length*2,'Маркеры задачи: '+matched.join(', '));
-  if(task.long&&['staged','constraints'].includes(recipe.id))add('long_task',2,'Большой объём исходной задачи');
-  if(diagnosis.stage==='setup'&&['deliverable','contract'].includes(recipe.id))add('setup_refusal',3,'После отказа на установку приоритет компактной постановке');
-  if(diagnosis.stage==='task'&&['verification','constraints'].includes(recipe.id))add('task_refusal',4,'Согласие на установку не привело к выполнению задания');
-  if(diagnosis.stage==='followup'&&recipe.id==='continuity')add('followup_refusal',8,'Отказ на продолжении: проверить сохранение состояния');
-  for(const signal of diagnosis.signals){const rule=SIGNALS.find(x=>x.id===signal.id),bonus=rule.boost[recipe.id];if(bonus)add('response:'+signal.id,bonus,signal.name);}
-  const related=references.filter(x=>x.features.some(f=>recipe.features.includes(f)));if(related.length)add('unverified_examples',Math.min(1.5,related.length*0.25),'Структурные маркеры в '+related.length+' примерах; эффективность не подтверждена');
-  const observed=reports.filter(x=>x.a?.strategy.id===recipe.id&&x.a?.provenance?.channel==='local'&&x.relation!=='unspecified_legacy_task');
-  let measured=0;for(const x of observed){const weight=x.relation==='same_objective'?1:0.2;measured+=weight*({accepted:3,setup_refusal:-2,task_refusal:-4,followup_refusal:-4}[x.r.outcome]||0);}
-  if(measured)add('reports',Math.max(-12,Math.min(12,measured)),'Оценки завершённых отчётов; другая задача имеет вес 0,2');
-  const excluded=used.has(recipe.id)?'Уже испытано в этом проекте':failed.has(recipe.id)?'Есть отказ на ту же задачу и модель':null;
-  return {id:recipe.id,name:recipe.name,score:Math.round(score*100)/100,reasons,excluded,index};
- }).sort((a,b)=>b.score-a.score||a.index-b.index);
- return {task,diagnosis,ranking,references,reports,available:ranking.filter(r=>!r.excluded),latest:last?.r||null};
-}
-function localContext(c,selection,s){
- const chosen=[];const push=x=>{if(x&&!chosen.some(y=>y.r.id===x.r.id))chosen.push(x);};push(selection.reports.find(x=>x.r.id===selection.latest?.id));
- for(const x of [...selection.reports].sort((a,b)=>Number(b.relation==='same_objective')-Number(a.relation==='same_objective')))if(chosen.length<8)push(x);
- return {schema:'promptlab-local-v1',objective:c.objective,category:c.domain,persona:c.persona,language:'ru',target:clone(c.target_snapshot),latest_report_id:selection.latest?.id||null,measurements:{completed_reports:selection.reports.length,same_objective_reports:selection.reports.filter(x=>x.relation==='same_objective').length,source:'human labels'},observations:chosen.map(x=>({id:x.r.id,source:'human_report',objective:x.objective,task_relation:x.relation,outcome:x.r.outcome,report:clone(x.r),prompt:x.a?.prompt||''})),legacy_observations:[],reference_library:{total:s.seeds.length,included:selection.references.length,examples:selection.references.map(x=>({...x,status:'unverified_structural_markers'}))},omitted:{reports:selection.reports.length-chosen.length,references:s.seeds.length-selection.references.length,legacy:s.runs.length},scope:'Local rule selection. Other-task results are analogies. No hidden-model knowledge.'};
-}
-const CATEGORY_GUIDANCE={
- coding:'Для программирования проверь входы, выходы, зависимости и способ запуска. Если запрошен готовый код, выдай необходимые файлы целиком; если запрошено объяснение, объясни механизм. Не утверждай, что код запускался, без фактического запуска.',
- writing:'Для текстовой задачи сохрани жанр, адресата, голос и объём из запроса. Если требуется готовый текст, выдай сам текст. Проверь логическую связность, повторы и соблюдение заданного стиля.',
- analysis:'Для аналитической задачи отдели исходные данные, выводы и допущения. Дай проверяемые основания выводов. Не изобретай источники, числа и результаты измерений.',
- planning:'Для плана укажи последовательность действий, зависимости и критерии завершения. Сроки и ресурсы, которых нет в запросе, обозначай как оценки или открытые вопросы.',
- general:'Ориентируйся на конкретный результат из запроса. Сохраняй все явно заданные ограничения и отделяй факты от допущений.'
-};
-function makeDesign(c,selection,choice,ctx){
- const recipe=RECIPES.find(r=>r.id===choice.id),task=selection.task,diagnosis=selection.diagnosis;
- const blocks=[{id:'task_spec',kind:'skeleton',text:'Задача, для которой задаются следующие правила работы:\n'+c.objective,depends_on:[]},
-  {id:'procedure',kind:'skeleton',text:'Порядок работы: '+recipe.name+'.\n'+recipe.procedure.map((p,i)=>(i+1)+'. '+p).join('\n'),depends_on:['task_spec']},
-  {id:'task_rules',kind:'skeleton',text:CATEGORY_GUIDANCE[task.category.id]+'\nТочные требования исходной задачи имеют приоритет над общими рекомендациями к оформлению. Не добавляй отсутствующие условия как будто их задал пользователь.',depends_on:['procedure']},
-  {id:'presentation',kind:'skin',text:'Пиши на языке запроса. Соблюдай заданный пользователем формат. Если формат не задан, отделяй результат от кратких пояснений и открытых вопросов. Не выводи служебные рассуждения о выборе этого протокола.',depends_on:['task_rules']},
-  {id:'dialogue',kind:'skeleton',text:diagnosis.stage==='followup'?'На последующих ходах проверяй, что новый ответ сохраняет действующие условия задачи. Изменяй только то, что меняет новый запрос. При потере данных разговора укажи, какой именно фрагмент нужен для продолжения.':'Применяй этот порядок к последующим заданиям в разговоре. Сейчас кратко сообщи, понятна ли постановка; выполнение конкретного задания начнётся со следующего сообщения. Подтверждение готовности само по себе не является выполнением задачи.',depends_on:['presentation']}];
- if(c.persona)blocks.push({id:'persona',kind:'persona',text:'Имя твоей персоны в этом разговоре: '+c.persona+'. Это имя для обращения; оно не меняет условия задачи.',depends_on:['dialogue']});
- const why=selection.latest?diagnosis.summary+' Выбрана ещё не испытанная в этом проекте структура «'+recipe.name+'» по правилам задачи и отчётов.':'Первый выбор по признакам задачи и доступным структурным примерам. Испытаний этой версии ещё нет.';
- return {title:recipe.name+' · '+task.category.name,analysis:{failure_stage:diagnosis.stage,summary:diagnosis.summary},strategy:{id:recipe.id,summary:recipe.name,why_changed:why},blocks,reference_ids:selection.references.filter(x=>x.features.some(f=>recipe.features.includes(f))).map(x=>x.id),report_ids:ctx.observations.map(x=>x.id),review:{approved:true,summary:'Проверены сохранность исходной задачи, зависимости блоков, имя персоны, ссылки и отсутствие повторённой структуры. Эффективность не проверена.',issues:[]}};
-}
-function construct(s,c){
- const selection=choose(s,c),ctx=localContext(c,selection,s);if(!selection.available.length)throw Error('Доступные структуры для этой задачи исчерпаны. История сохранена. Повторять неудачные версии с косметическими изменениями генератор не будет.');
- const rejected=[];
- for(const choice of selection.available){
-  const design=makeDesign(c,selection,choice,ctx);
-  try{
-   const checked=base.validateDesign(design,ctx,s,c);
-   if(!checked.blocks.some(b=>b.id==='task_spec'&&b.text.endsWith(c.objective)))throw Error('Не сохранён полный текст задачи');
-   return {design:checked,context:ctx,provenance:{channel:'local',engine_version:VERSION,review_type:'local_rules',review:checked.review,plan:{task_contract:{deliverable:c.objective,constraints:selection.task.constraint_clauses,success_criteria:['Выполнены условия исходного запроса; оценка фиксируется по фактическому ответу.'],open_questions:[]}},local:{task:selection.task,diagnosis:selection.diagnosis,ranking:selection.ranking,selected:choice.id,rejected,reference_features:selection.references,report_count:selection.reports.length,remaining_structures:selection.available.length-1}}};
-  }catch(error){rejected.push({id:choice.id,reason:error.message});}
+function memory(state,c){
+ const observations=records(state,c),latest=observations.find(x=>x.report.attempt_id===c.current_attempt_id),diagnosis=analyze(latest?.report),stats={},pairStats={};
+ for(const row of observations){const genes=row.attempt?.provenance?.search?.genome;if(!genes||!row.weight)continue;for(const id of Object.values(genes)){const entry=stats[id]??={setup:{yes:0,no:0},task:{yes:0,no:0},followup:{yes:0,no:0},reports:0};entry.reports+=row.weight;for(const [stage,value] of Object.entries(row.assessment.vector))if(value!==null)entry[stage][value?'yes':'no']+=row.weight;}
+  const pair=genes.method+'|'+genes.check,entry=pairStats[pair]??={yes:0,no:0};entry[row.report.outcome==='accepted'?'yes':'no']+=row.weight;
  }
- throw Error('Новая структура не прошла проверку отличий от прежних версий. История сохранена; автоматическое повторение остановлено.');
+ const confirmed=observations.filter(x=>x.relation==='same_objective'&&x.report.outcome==='accepted');
+ return {observations,latest,diagnosis,stats,pairStats,facts:taskFacts(c),confirmed:confirmed.map(x=>({attempt_id:x.attempt?.id,report_id:x.report.id,turns:x.report.turns.length})).filter(x=>x.attempt_id)};
 }
-class LocalEngine extends base.Engine{
- async chat(){throw Error('В локальной версии сетевые вызовы моделей отключены.');}
- async request(path,data){
-  if(['/api/simple/start','/api/simple/next','/api/simple/retry'].includes(path))data={...data,channel:'local'};
-  return super.request(path,data);
+function scoreComponent(component,mem){
+ const item=mem.stats[component.id],weights=mem.diagnosis.stage==='setup'?{setup:0.6,task:0.3,followup:0.1}:mem.diagnosis.stage==='followup'?{setup:0.1,task:0.3,followup:0.6}:{setup:0.15,task:0.6,followup:0.25};
+ let score=0;for(const [stage,weight] of Object.entries(weights)){const st=item?.[stage]||{yes:0,no:0};score+=weight*(st.yes+1)/(st.yes+st.no+2);}
+ const support=item?.reports||0,exploration=0.16*Math.sqrt(Math.log(mem.observations.length+2)/(support+1));score+=exploration;
+ score+=Math.min(0.24,component.tags.filter(t=>mem.facts.features.includes(t)).length*0.06);
+ if(mem.diagnosis.stage==='followup'&&component.slot==='continuity')score+=['continuity:state','continuity:delta','continuity:context'].includes(component.id)?0.14:0;
+ for(const signal of mem.diagnosis.signals){if(signal.id==='missing_input'&&component.id==='interpret:inputs')score+=0.2;if(signal.id==='conflict'&&component.id==='check:consistency')score+=0.2;if(signal.id==='length'&&['skin:compact','method:staged'].includes(component.id))score+=0.15;if(signal.id==='context_loss'&&component.id==='continuity:context')score+=0.3;}
+ if(component.source_id)score+=0.04;
+ return {score,support,exploration};
+}
+const api={analyze,records,taskFacts,memory,scoreComponent};root.PromptFeedback=api;if(typeof module!=='undefined'&&module.exports)module.exports=api;
+})(globalThis);
+
+</script><script>
+"use strict";
+(function(root){
+const base=root.PromptLab||(typeof require==='function'?require('./workflow.js'):null);
+const G=root.PromptGrammar||(typeof require==='function'?require('./grammar.js'):null);
+const F=root.PromptFeedback||(typeof require==='function'?require('./feedback.js'):null);
+const VERSION='search-1';
+const clone=x=>JSON.parse(JSON.stringify(x));
+function prepare(state,c){
+ const grammar=G.corpus(state.seeds,c),memory=F.memory(state,c),history=state.attempts.filter(a=>a.campaign_id===c.id),used=new Set(history.map(a=>a.provenance?.search?.signature).filter(Boolean));
+ for(const row of memory.observations)if(row.relation==='same_objective'&&row.report.outcome!=='accepted'&&row.attempt?.provenance?.search?.signature)used.add(row.attempt.provenance.search.signature);
+ const current=memory.latest?.attempt?.provenance?.search?.genome||null;
+ const previous=c.search_state?.grammar===grammar.fingerprint?c.search_state:{cursor:0,round:0};
+ const scores={};for(const d of G.dims)for(const comp of grammar.catalogs[d])scores[comp.id]=F.scoreComponent(comp,memory);
+ return {grammar,memory,history,used,current,previous,scores};
+}
+function context(state,c,prepared,referenceIds=[]){
+ const mem=prepared.memory,selected=[];const include=x=>{if(x&&!selected.some(y=>y.report.id===x.report.id))selected.push(x);};include(mem.latest);
+ for(const row of [...mem.observations].sort((a,b)=>b.weight-a.weight))if(selected.length<8)include(row);
+ const examples=state.seeds.filter(x=>referenceIds.includes(x.id)).map(x=>({id:x.id,title:x.title,sha256:G.hash(x.text),status:'unverified_user_reference'}));
+ return {schema:'promptlab-search-v1',objective:c.objective,category:c.domain,persona:c.persona,language:'ru',target:clone(c.target_snapshot),latest_report_id:mem.latest?.report.id||null,measurements:{completed_reports:mem.observations.length,same_objective_reports:mem.observations.filter(x=>x.relation==='same_objective').length,source:'human reports; not a success forecast'},observations:selected.map(x=>({id:x.report.id,source:'human_report',objective:x.objective,task_relation:x.relation,outcome:x.report.outcome,report:clone(x.report),prompt:x.attempt?.prompt||''})),legacy_observations:[],reference_library:{total:state.seeds.length,included:examples.length,examples},omitted:{reports:mem.observations.length-selected.length,references:state.seeds.length-examples.length,legacy:state.runs.length},scope:'Observed outcomes apply to tested conversations. Component credit is correlational, not causal.'};
+}
+function describe(state,c,prepared){
+ const p=prepared||prepare(state,c);return {version:VERSION,component_counts:Object.fromEntries(G.dims.map(d=>[d,p.grammar.catalogs[d].length])),combinations:G.variants(p.grammar),structural_combinations:G.variants(p.grammar)/p.grammar.catalogs.skin.length,trial_count:p.history.length,completed_reports:p.memory.observations.length,confirmed:p.memory.confirmed,diagnosis:p.memory.diagnosis,library:p.grammar.stats,cursor:p.previous.cursor||0,round:p.previous.round||0};
+}
+function buildPool(state,c,p,budget){
+ const {grammar,memory,used,scores}=p,pool=new Map(),rejections={already_tested:0,cosmetic_change:0,too_many_sources:0,invalid_component:0},total=G.variants(grammar),round=(p.previous.round||0)+1;
+ const best=Object.fromEntries(G.dims.map(d=>[d,[...grammar.catalogs[d]].sort((a,b)=>scores[b.id].score-scores[a.id].score||a.id.localeCompare(b.id))[0].id]));
+ function offer(genome,origin,parents=[]){
+  let components;try{components=G.lookup(grammar,genome);}catch{rejections.invalid_component++;return;}
+  const signature=G.signature(genome);if(used.has(signature)){rejections.already_tested++;return;}
+  if(pool.has(signature))return;
+  if(p.current&&memory.latest.report.outcome!=='accepted'&&G.distance(genome,p.current)<2){rejections.cosmetic_change++;return;}
+  const sources=[...new Set(Object.values(components).map(x=>x.source_id).filter(Boolean))];if(sources.length>2){rejections.too_many_sources++;return;}
+  const novelty=p.current?G.distance(genome,p.current)/G.structural.length:1;
+  let score=G.dims.reduce((sum,d)=>sum+scores[genome[d]].score,0)/G.dims.length+0.08*novelty;
+  const pair=memory.pairStats[genome.method+'|'+genome.check];if(pair)score+=0.12*((pair.yes+1)/(pair.yes+pair.no+2)-0.5);
+  pool.set(signature,{genome,signature,score,origin,parents,novelty,sources});
  }
- enqueue(s,c){
-  if(!c.objective)throw Error('У старого проекта нет текста задачи. Начните «Новую задачу»; история сохранена.');
-  const active=s.jobs.find(j=>j.id===c.current_job_id);if(active&&['queued','running','waiting_for_result'].includes(active.status)){if(active.channel==='local')throw Error('Генерация уже выполняется');active.status='cancelled';active.error='Заменено локальной генерацией без API.';}
-  const result=construct(s,c),bytes=new Uint8Array(16);root.crypto.getRandomValues(bytes);const now=new Date().toISOString();
-  const j={id:[...bytes].map(x=>x.toString(16).padStart(2,'0')).join(''),revision:0,seq:++s.clock,created:now,updated:now,type:'design',channel:'local',status:'running',stage:'composition',input:{campaign_id:c.id,context:result.context,config:null},prompt:null,result:null,error:null,stages:[]};
-  s.jobs.unshift(j);c.current_job_id=j.id;c.channel='local';c.revision++;c.updated=now;
-  const attempt=this.finishDesign(s,j,result.design,result.provenance);return {campaign_id:c.id,job_id:j.id,attempt_id:attempt.id};
+ offer(best,'component_selection');
+ const parents=memory.observations.filter(x=>x.attempt?.provenance?.search?.genome).sort((a,b)=>(b.report.outcome==='accepted')-(a.report.outcome==='accepted')||b.weight-a.weight).slice(0,4).map(x=>({id:x.attempt.id,genome:x.attempt.provenance.search.genome}));
+ if(p.current&&!parents.some(x=>x.id===memory.latest.attempt.id))parents.unshift({id:memory.latest.attempt.id,genome:p.current});
+ const bases=[{id:null,genome:best},...parents].slice(0,5);
+ for(const parent of bases){
+  for(let k=0;k<24;k++){
+   const child={...parent.genome},d1=G.structural[k%G.structural.length],d2=G.structural[(k+1+Math.floor(k/G.structural.length))%G.structural.length];
+   for(const [d,delta] of [[d1,1],[d2,3]]){const options=grammar.catalogs[d],old=options.findIndex(x=>x.id===child[d]);child[d]=options[(Math.max(old,0)+round+k+delta)%options.length].id;}
+   child.skin=grammar.catalogs.skin[(round+k)%grammar.catalogs.skin.length].id;offer(child,'structural_mutation',parent.id?[parent.id]:[]);
+  }
+ }
+ for(let i=0;i<parents.length-1;i++)for(let mask=1;mask<16;mask++){const a=parents[i],b=parents[i+1],child={};G.dims.forEach((d,k)=>child[d]=((mask>>k)&1)?a.genome[d]:b.genome[d]);offer(child,'recombination',[a.id,b.id]);}
+ // Coprime stride covers the product space without favoring the fastest-changing slot.
+ // Catalog dimensions are <=64, so prime 104729 shares no factor with their product.
+ const offset=parseInt(G.hash(c.objective+'|'+c.target_id).slice(0,8),16)%total;
+ for(let i=0;i<budget;i++){const ordinal=((p.previous.cursor||0)+i)%total,index=(ordinal*104729+offset)%total;offer(G.decode(grammar,index),'grammar_exploration');}
+ const cursor=((p.previous.cursor||0)+budget)%total;
+ const candidates=[...pool.values()].sort((a,b)=>b.score-a.score||a.signature.localeCompare(b.signature));
+ return {candidates,rejections,next_state:{grammar:grammar.fingerprint,cursor,round},enumerated:budget,total};
+}
+function compile(state,c,p,item,search){
+ const rendered=G.render(p.grammar,item.genome,c),ctx=context(state,c,p,rendered.references),changes=p.current?G.structural.filter(d=>item.genome[d]!==p.current[d]).map(d=>({slot:d,name:G.slotNames[d],from:p.current[d],to:item.genome[d]})):[];
+ const reasons=[p.memory.diagnosis.summary,item.origin==='recombination'?'Сочетание частей ранее испытанных структур.':item.origin==='structural_mutation'?'Изменены отдельные узлы структуры.':'Поиск нового сочетания компонентов.'];
+ const design={title:(rendered.components.method.label+' · '+rendered.components.check.label).slice(0,190),analysis:{failure_stage:p.memory.diagnosis.stage,summary:p.memory.diagnosis.summary},strategy:{id:'genome-'+G.hash(item.signature).slice(0,24),summary:G.structural.map(d=>rendered.components[d].label).join(' → '),why_changed:reasons.join(' ')},blocks:rendered.blocks,reference_ids:rendered.references,report_ids:ctx.observations.map(x=>x.id),review:{approved:true,summary:'Проверены граф блоков, полный текст задачи, имя, ссылки и повторы. Смысловая корректность заимствованных фрагментов и результативность ещё требуют испытания.',issues:[]}};
+ const checked=base.validateDesign(design,ctx,state,c);
+ if(!checked.blocks.some(b=>b.id==='task_spec'&&b.text.endsWith(c.objective)))throw Error('Полный текст задачи утрачен');
+ const componentEvidence=G.dims.map(d=>{const x=rendered.components[d],stat=p.scores[x.id];return {slot:d,name:G.slotNames[d],id:x.id,label:x.label,source_id:x.source_id,source_hash:x.source_hash||null,support:stat.support,score:stat.score};});
+ return {design:checked,context:ctx,provenance:{channel:'local',engine_version:VERSION,review_type:'local_search',review:checked.review,search:{genome:clone(item.genome),signature:item.signature,grammar:p.grammar.fingerprint,origin:item.origin,parents:item.parents,changes,components:componentEvidence,diagnosis:p.memory.diagnosis,score:item.score,score_interpretation:'ranking only; component credit is not proof of causation',evaluated:search.candidates.length,enumerated:search.enumerated,rejections:search.rejections,library:p.grammar.stats,confirmed:p.memory.confirmed,round:search.next_state.round,cursor:search.next_state.cursor}}};
+}
+function search(state,c,options={}){
+ const p=prepare(state,c),budget=Math.max(1,Math.min(1024,options.budget||384)),pool=buildPool(state,c,p,budget),rejected=[];
+ for(const item of pool.candidates.slice(0,64)){
+  try{return {...compile(state,c,p,item,pool),next_state:pool.next_state,diagnostics:{...describe(state,c,p),proposed:pool.candidates.length,enumerated:pool.enumerated,rejected}};}
+  catch(error){rejected.push({signature:item.signature,reason:error.message});}
+ }
+ return {paused:true,next_state:pool.next_state,context:context(state,c,p),diagnostics:{...describe(state,c,p),proposed:pool.candidates.length,enumerated:pool.enumerated,rejected,rejections:pool.rejections}};
+}
+function newId(){const data=new Uint8Array(16);root.crypto.getRandomValues(data);return [...data].map(v=>v.toString(16).padStart(2,'0')).join('');}
+class SearchEngine extends base.Engine{
+ async chat(){throw Error('Сетевые вызовы моделей отключены в локальной версии.');}
+ async request(path,data){if(path==='/api/seeds/toggle')return this.store.mutate(s=>{const seed=s.seeds.find(x=>x.id===data.seed_id);if(!seed||seed.revision!==data.revision)throw Error('Запись изменилась. Обновите страницу.');seed.enabled=seed.enabled===false;seed.revision++;seed.updated=new Date().toISOString();s.events.push({seq:++s.clock,entity:seed.id,event:'seed.toggled',created:seed.updated,data:{enabled:seed.enabled}});return seed;});if(['/api/simple/start','/api/simple/next','/api/simple/retry'].includes(path))data={...data,channel:'local'};return super.request(path,data);}
+ async restore(payload,confirmed){
+  for(const row of payload?.objects||[]){
+   if(row.kind==='seeds'&&row.enabled!==undefined&&typeof row.enabled!=='boolean')throw Error('Повреждён статус примера');
+   if(row.kind==='campaigns'&&row.search_state){const q=row.search_state;if(!/^[a-f0-9]{64}$/.test(q.grammar)||!Number.isSafeInteger(q.cursor)||q.cursor<0||!Number.isSafeInteger(q.round)||q.round<0)throw Error('Повреждена позиция поиска');}
+   const info=row.kind==='attempts'&&row.provenance?.search;
+   if(info){if(!info.genome||G.dims.some(d=>typeof info.genome[d]!=='string'||info.genome[d].length>100)||info.signature!==G.signature(info.genome))throw Error('Повреждена структура попытки');}
+  }
+  return super.restore(payload,confirmed);
+ }
+ enqueue(state,c){
+  if(!c.objective)throw Error('В старом проекте нет текста задачи. Начните новую задачу; история сохранена.');
+  const active=state.jobs.find(j=>j.id===c.current_job_id);if(active&&['queued','running','waiting_for_result'].includes(active.status)){if(active.channel==='local')throw Error('Поиск уже выполняется');active.status='cancelled';active.error='Продолжено локальным поиском.';}
+  const result=search(state,c),now=new Date().toISOString(),job={id:newId(),revision:0,seq:++state.clock,created:now,updated:now,type:'design',channel:'local',status:result.paused?'search_paused':'running',stage:result.paused?'search':'composition',input:{campaign_id:c.id,context:result.context,config:null},prompt:null,result:null,error:null,stages:[],search:result.diagnostics};
+  state.jobs.unshift(job);c.current_job_id=job.id;c.search_state=result.next_state;c.channel='local';c.revision++;c.updated=now;
+  if(result.paused){job.error='В этой порции поиска не найден новый вариант, прошедший проверки. Поиск можно продолжить с сохранённой позиции или расширить базу.';return {campaign_id:c.id,job_id:job.id,paused:true};}
+  const attempt=this.finishDesign(state,job,result.design,result.provenance);return {campaign_id:c.id,job_id:job.id,attempt_id:attempt.id};
  }
 }
-const api={...base,Engine:LocalEngine,LocalEngine,localFacts:facts,localDiagnose:diagnose,localChoices:choose,localConstruct:construct,localFeatures:seedFeatures,localRecipes:RECIPES.map(r=>({id:r.id,name:r.name})),localVersion:VERSION};
-root.PromptLab=api;if(typeof module!=='undefined'&&module.exports)module.exports=api;
+const api={...base,Engine:SearchEngine,SearchEngine,LocalEngine:SearchEngine,searchLocal:search,searchDescribe:describe,searchPrepare:prepare,searchPool:buildPool,parseReference:G.parseSeed,searchVersion:VERSION,searchSlots:G.slotNames};root.PromptLab=api;if(typeof module!=='undefined'&&module.exports)module.exports=api;
 })(globalThis);
 
 </script><script>
@@ -624,29 +700,32 @@ function verdictOptions(setup=false){return `<option value="">Выберите �
 function startForm(){const c=current();return `<form id="start-form">
  ${area('Для какой задачи нужен промпт?','objective','','required maxlength="30000" rows="6" placeholder="Опишите нужный результат, условия и формат ответа."')}
  <div class="grid">${select('Целевая модель — где проверять промпт','target_id',state.targets.map(t=>`<option value="${esc(t.id)}" ${c?.target_id===t.id?'selected':''}>${esc(t.title)}</option>`).join(''))}${input('Имя персоны — необязательно','persona',c?.persona||'','maxlength="100" placeholder="Например: Foras"')}</div>
- <details><summary>Категория задачи — необязательно</summary>${input('Категория','domain',c?.domain||'general','maxlength="100" list="categories"')}<datalist id="categories"><option value="general">Автоопределение по тексту</option><option value="coding">Программирование</option><option value="writing">Тексты</option><option value="analysis">Анализ</option><option value="planning">Планирование</option></datalist></details>
- <p class="help">Локальный движок правил. API, ключ и подключение нейросети не нужны.</p>
+ <details><summary>Категория задачи — необязательно</summary>${input('Категория','domain',c?.domain||'general','maxlength="100" list="categories"')}<datalist id="categories"><option value="general">Общая категория</option><option value="coding">Программирование</option><option value="writing">Тексты</option><option value="analysis">Анализ</option><option value="planning">Планирование</option></datalist></details>
+ <p class="help">Составной поиск по базе и истории испытаний. API и ключ не нужны.</p>
  <div class="actions"><button class="primary" type="submit">Собрать промпт</button></div></form>`;}
 
-function generator(){const c=current();return `${!c?`<section class="hero"><div class="eyebrow">ЛОКАЛЬНЫЙ ГЕНЕРАТОР · БЕЗ API</div><h2>Задача → правила → промпт.</h2><p>Структура выбирается программной логикой. Результаты проверок меняют следующий выбор.</p></section><section class="panel">${startForm()}</section>`:`<section class="panel"><div class="row spread"><div><h2>${esc(c.target_snapshot.title)}</h2><p class="help">${esc(c.domain)}${c.persona?' · Персона '+esc(c.persona):''}</p></div><span class="badge good">${c.channel==='local'?'Локальный движок':'Проект прошлой версии'}</span></div>${c.objective?`<div class="objective-summary"><strong>Задача</strong><p>${esc(c.objective)}</p></div>`:'<p class="notice">В старом проекте не был указан текст задачи. Начните новую задачу; история сохранена.</p>'}<details ${startExpanded||!c.objective?'open':''}><summary>Новая задача</summary>${startForm()}</details></section>${activePanel(c)}`}<details class="panel"><summary>Логика генератора</summary><ol><li>Сохраняет полный текст задачи и находит признаки категории, ограничений и формата.</li><li>Выделяет структурные маркеры из вашей базы примеров.</li><li>Оценивает ${PromptLab.localRecipes.length} способов построения промпта по правилам и завершённым отчётам.</li><li>Исключает уже испытанные структуры и неудачные подходы к той же задаче на той же модели.</li><li>Собирает блоки, проверяет целостность и показывает причины выбора.</li></ol><p class="help">Правила и исходные конструкции заданы в коде. Память меняет их приоритеты по вашим отчётам. Распознавание текстовых маркеров не является пониманием скрытых механизмов модели.</p></details>`;}
+function generator(){const c=current();return `${!c?`<section class="hero"><div class="eyebrow">СОСТАВНЫЕ ПРОМПТЫ · ПОИСК ПО ОТЧЁТАМ</div><h2>Задача. База. Испытания.</h2><p>Добавляйте примеры, получайте новые сочетания частей и передавайте реальные результаты проверки.</p></section><section class="panel">${startForm()}</section>`:`<section class="panel"><div class="row spread"><div><h2>${esc(c.target_snapshot.title)}</h2><p class="help">${esc(c.domain)}${c.persona?' · Персона '+esc(c.persona):''}</p></div><span class="badge good">Локальный поиск</span></div>${c.objective?`<div class="objective-summary"><strong>Задача</strong><p>${esc(c.objective)}</p></div>`:'<p class="notice">В старом проекте нет текста задачи. Начните новую задачу; история сохранена.</p>'}<details ${startExpanded||!c.objective?'open':''}><summary>Новая задача</summary>${startForm()}</details></section>${activePanel(c)}`}<details class="panel"><summary>Как строится следующий промпт</summary><ol><li>База разбирается на фрагменты: контекст, порядок работы, проверка, продолжение и оформление.</li><li>Поиск сочетает компоненты, изменяет части прежних структур и соединяет части разных испытаний.</li><li>Отчёты отдельно влияют на установку, первое задание и продолжения.</li><li>Проверяются целостность задачи, зависимости и повторы. Смена одной кожи не считается новой структурой.</li><li>Готовая версия получает статус «ещё не испытана». Успех фиксируется только по вашим отчётам.</li></ol><p class="help">Это локальный поиск по заданным конструкциям и вашей базе. Он не заменяет смысловой анализ нейросетью и не предсказывает гарантированный обход защиты.</p></details>`;}
 
-function activePanel(c){const j=job(c),a=attempt(c);if(j&&j.channel!=='local'&&['waiting_for_result','queued','running','failed','interrupted','cancelled'].includes(j.status))return `<section class="panel"><h2>Продолжить локально</h2><p>В этом проекте остался запрос предыдущей версии. Теперь промпт можно собрать программной логикой без API.</p>${c.objective?`<button class="primary" data-next="${c.id}">Собрать локально</button>`:''}</section>`;if(j&&['waiting_for_result','queued','running','failed','interrupted','cancelled'].includes(j.status))return jobPanel(j,c);return a?attemptPanel(a,c):empty('Начните генерацию.');}
+function activePanel(c){const j=job(c),a=attempt(c);if(j?.status==='search_paused')return searchPause(j,c);if(j&&j.channel!=='local'&&['waiting_for_result','queued','running','failed','interrupted','cancelled'].includes(j.status))return `<section class="panel"><h2>Продолжить локально</h2><p>В этом проекте остался запрос предыдущей версии. Теперь промпт можно собрать программной логикой без API.</p>${c.objective?`<button class="primary" data-next="${c.id}">Собрать локально</button>`:''}</section>`;if(j&&['waiting_for_result','queued','running','failed','interrupted','cancelled'].includes(j.status))return jobPanel(j,c);return a?attemptPanel(a,c):empty('Начните генерацию.');}
+
+function searchPause(j,c){return `<section class="panel"><h2>Нужна следующая порция поиска</h2><p>${esc(j.error)}</p><p class="help">В последней порции рассмотрено сочетаний: ${j.search?.proposed||0}. Позиция поиска сохранена. Это не результат испытания модели.</p><div class="actions"><button class="primary" data-next="${c.id}">Продолжить поиск</button><button data-nav="seeds">Расширить базу</button></div><details><summary>Причины отсева</summary>${(j.search?.rejected||[]).slice(0,8).map(x=>`<p>${esc(x.reason)}</p>`).join('')||'<p class="help">Ранее испытанные или слишком близкие структуры.</p>'}</details></section>`;}
 
 function jobPanel(j,c){return `<section class="panel"><h2>Сборка не завершена</h2><p class="notice">${esc(j.error||'Операция прервана')}</p><p>История сохранена. Можно повторить локальную сборку.</p><form id="retry-form"><button class="primary">Собрать локально</button></form></section>`;}
 
-function attemptPanel(a,c){const r=report(a);return `<section class="panel"><div class="eyebrow">ПРОМПТ ${a.number} · ${a.status==='reported'?'ЕСТЬ ОТЧЁТ':'ЕЩЁ НЕ ИСПЫТАН'}</div><div class="row spread"><h2>${esc(a.title)}</h2><button class="primary" data-copy-attempt="${a.id}">Копировать промпт</button></div><pre class="prompt-output">${esc(a.prompt)}</pre>${a.provenance.channel==='local'?logicPanel(a,c):''}${a.provenance.channel!=='local'&&a.provenance.plan?.task_contract?`<details><summary>Как учтена задача</summary><p>${esc(a.provenance.plan.task_contract.deliverable)}</p><p class="help">Критерии проверки</p><ul>${a.provenance.plan.task_contract.success_criteria.map(t=>`<li>${esc(t)}</li>`).join('')}</ul>${a.provenance.plan.task_contract.open_questions.length?`<p class="help">Открытые вопросы: ${esc(a.provenance.plan.task_contract.open_questions.join('; '))}</p>`:''}</details>`:''}<details><summary>Что изменилось и почему</summary><p>${esc(a.analysis.summary)}</p><p>${esc(a.strategy.summary)}</p><p class="help">${esc(a.strategy.why_changed)}</p><p class="help">${a.provenance.review_type==='local_rules'?'Программная проверка':a.provenance.review_type==='separate_model_call'?'Проверен отдельным вызовом модели':'Самопроверка модели в чате'}: ${esc(a.provenance.review.summary)}</p></details></section>${a.status==='awaiting_setup'?setupForm(a):a.status==='awaiting_task'?taskReport(a,r):completedReport(a,r,c)}`;}
-function logicPanel(a,c){const info=a.provenance.local;if(!info)return '';return `<details><summary>Почему выбрана эта структура</summary><p><strong>${esc(a.strategy.summary)}</strong> · ${esc(info.task.category.name)}</p><p class="help">Баллы отражают правила выбора, а не вероятность успеха.</p><div class="table-wrap"><table><thead><tr><th>Структура</th><th>Баллы</th><th>Решение</th></tr></thead><tbody>${info.ranking.map(r=>`<tr><td>${esc(r.name)}</td><td>${r.score}</td><td>${esc(r.id===info.selected?'Выбрана':r.excluded||'Доступна')}</td></tr>`).join('')}</tbody></table></div><ul>${(info.ranking.find(r=>r.id===info.selected)?.reasons||[]).map(r=>`<li>${esc(r.detail)}: ${r.points>0?'+':''}${r.points}</li>`).join('')}</ul>${info.diagnosis.signals.length?`<h3>Маркеры в ответе модели</h3>${info.diagnosis.signals.map(x=>`<p>${esc(x.name)} · ход ${x.turn}</p><pre>${esc(x.excerpt)}</pre>`).join('')}<p class="help">Это найденные фразы, а не доказанные причины отказа.</p>`:''}${info.task.constraint_clauses.length?`<h3>Фразы с ограничениями</h3><ul>${info.task.constraint_clauses.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`:''}<p class="help">Завершённых отчётов по модели и категории: ${info.report_count}. Вся исходная задача сохранена в промпте.</p></details>`;}
+function attemptPanel(a,c){const r=report(a);return `<section class="panel"><div class="eyebrow">ПРОМПТ ${a.number} · ${a.status==='reported'?'ЕСТЬ ОТЧЁТ':'ЕЩЁ НЕ ИСПЫТАН'}</div><div class="row spread"><h2>${esc(a.title)}</h2><button class="primary" data-copy-attempt="${a.id}">Копировать промпт</button></div><pre class="prompt-output">${esc(a.prompt)}</pre>${a.provenance.channel==='local'?logicPanel(a,c):''}${a.provenance.channel!=='local'&&a.provenance.plan?.task_contract?`<details><summary>Как учтена задача</summary><p>${esc(a.provenance.plan.task_contract.deliverable)}</p><p class="help">Критерии проверки</p><ul>${a.provenance.plan.task_contract.success_criteria.map(t=>`<li>${esc(t)}</li>`).join('')}</ul>${a.provenance.plan.task_contract.open_questions.length?`<p class="help">Открытые вопросы: ${esc(a.provenance.plan.task_contract.open_questions.join('; '))}</p>`:''}</details>`:''}<details><summary>Что изменилось и почему</summary><p>${esc(a.analysis.summary)}</p><p>${esc(a.strategy.summary)}</p><p class="help">${esc(a.strategy.why_changed)}</p><p class="help">${['local_rules','local_search'].includes(a.provenance.review_type)?'Программная проверка':a.provenance.review_type==='separate_model_call'?'Проверен отдельным вызовом модели':'Самопроверка модели в чате'}: ${esc(a.provenance.review.summary)}</p></details></section>${a.status==='awaiting_setup'?setupForm(a):a.status==='awaiting_task'?taskReport(a,r):completedReport(a,r,c)}`;}
+function logicPanel(a,c){const info=a.provenance.search;if(!info)return '<p class="help">Эта версия создана предыдущим движком. Её отчёт сохраняется в истории.</p>';return `<details><summary>Почему выбрана эта структура</summary><p>${esc(a.strategy.why_changed)}</p><p class="help">Сравнено сочетаний: ${info.evaluated}. Итерация поиска: ${info.round}. Баллы служат выбору вариантов и не являются вероятностью успеха.</p><div class="table-wrap"><table><thead><tr><th>Часть</th><th>Компонент</th><th>Опыт</th></tr></thead><tbody>${info.components.map(x=>`<tr><td>${esc(x.name)}</td><td>${esc(x.label)}${x.source_id?' · из вашей базы':''}</td><td>${Number(x.support).toFixed(2)}</td></tr>`).join('')}</tbody></table></div>${info.changes.length?`<p>Изменены части: ${esc(info.changes.map(x=>x.name).join(', '))}.</p>`:''}${info.parents.length?`<p class="help">Использовано прежних структур: ${info.parents.length}.</p>`:''}${info.diagnosis.signals.length?`<h3>Фрагменты ответов, повлиявшие на выбор</h3>${info.diagnosis.signals.map(x=>`<p>${esc(x.name)} · ход ${x.turn}</p><pre>${esc(x.excerpt)}</pre>`).join('')}<p class="help">Найденные фразы указывают на возможную причину, но не доказывают её.</p>`:''}<p class="help">Опыт частей отражает совместное появление в испытаниях, а не доказательство эффективности каждой части по отдельности.</p></details>`;}
 
 function setupForm(a){return `<section class="panel"><div class="eyebrow">ШАГ 2 · ОТВЕТ НА ПРОМПТ</div><h2>Как модель ответила на установку?</h2><p class="help">Отправьте промпт в новом разговоре с целевой моделью и сохраните её фактический ответ.</p><form id="setup-${a.id}" data-form="setup" data-attempt="${a.id}">${area('Полный ответ модели','response','','required rows="6"')}${select('Результат установки','decision',verdictOptions(true))}<p class="notice" id="accept-note" hidden>После accept потребуется отдельный запрос по категории и фактический ответ на него. Само согласие не считается успехом.</p><button class="primary">Сохранить ответ</button></form></section>`;}
 function toggleSetup(){const a=state&&attempt(),form=a&&$('#setup-'+a.id),note=$('#accept-note');if(note)note.hidden=form?.elements?.namedItem('decision')?.value!=='accept';}
 function turnsList(r){return r.turns.map((t,i)=>`<details class="entry"><summary>Задание ${i+1} · ${esc(t.decision)}</summary><p class="help">Ваш запрос</p><pre>${esc(t.request)}</pre><p class="help">Ответ модели</p><pre>${esc(t.response)}</pre>${t.notes?`<p>${esc(t.notes)}</p>`:''}</details>`).join('');}
 function taskReport(a,r){const previous=state.reports.find(x=>x.attempt_id===a.previous_attempt_id),c=state.campaigns.find(x=>x.id===a.campaign_id),repeatRequest=!r.turns.length?previous?.turns[0]?.request||c?.objective||'':'';return `<section class="panel"><div class="eyebrow">ШАГ 3 · РЕАЛЬНЫЕ ЗАДАНИЯ</div><h2>${r.turns.length?'Проверка продолжения':'Промпт принят. Проверьте задание.'}</h2><details><summary>Ответ на установку · accept</summary><pre>${esc(r.setup.response)}</pre></details>${turnsList(r)}<form id="task-${a.id}" data-form="task" data-attempt="${a.id}">${area('Запрос, который вы отправили целевой модели','request',repeatRequest,'required rows="4"')}<button type="button" class="small" data-copy-request="${a.id}">Копировать запрос</button>${repeatRequest?`<p class="help">${previous?.turns.length?'Подставлен запрос из прошлой проверки.':'Подставлена исходная задача.'} Если вы отправили другую формулировку, исправьте её здесь.</p>`:''}${area('Полный ответ модели на этот запрос','response','','required rows="6"')}${select('Результат задания','decision',verdictOptions())}<details><summary>Дополнительные наблюдения</summary>${area('Замечания — необязательно','notes')}</details><button class="primary">Добавить в отчёт</button></form>${r.turns.length?`<div class="divider"></div><p class="help">Можно проверить ещё одно задание в этом же разговоре или завершить отчёт.</p><button class="primary" data-finish="${a.id}">Завершить отчёт и собрать следующий промпт</button><button class="small" data-save-report="${a.id}">Только сохранить отчёт</button>`:''}</section>`;}
-function completedReport(a,r,c){const choices=c.objective?PromptLab.localChoices(state,c):null;return `<section class="panel"><div class="eyebrow">ОТЧЁТ СОХРАНЁН</div><h2>${esc(outcomes[r.outcome])}</h2><p>${r.setup.decision==='refusal'?'Отказ на начальный промпт записан отдельно.':'Согласие на установку и результаты реальных заданий записаны отдельно.'}</p><details><summary>Полный отчёт</summary><p>Установка: ${esc(r.setup.decision)}</p><pre>${esc(r.setup.response)}</pre>${turnsList(r)}</details>${choices?.available.length?`<p class="help">Неиспытанных доступных структур: ${choices.available.length} из ${PromptLab.localRecipes.length}.</p><button class="primary" data-next="${c.id}">Собрать следующий промпт по отчёту</button>`:`<p class="notice">${c.objective?'Доступные структуры для этой задачи исчерпаны. Промпты и результаты остаются в истории; косметические повторы не генерируются.':'Для продолжения начните новую задачу с её полным текстом.'}</p>`}</section>`;}
+function completedReport(a,r,c){const info=c.objective?PromptLab.searchDescribe(state,c):null;return `<section class="panel"><div class="eyebrow">ОТЧЁТ СОХРАНЁН</div><h2>${esc(outcomes[r.outcome])}</h2><details><summary>Полный отчёт</summary><p>Установка: ${esc(r.setup.decision)}</p><pre>${esc(r.setup.response)}</pre>${turnsList(r)}</details>${info?`<p class="help">Испытанных версий в проекте: ${info.trial_count}. Поиск продолжает работу по сочетаниям компонентов.</p>${info.confirmed.length?`<p>По вашим отчётам, выполнены задания у ${info.confirmed.length} версий. Они сохранены в истории.</p>`:''}<button class="primary" data-next="${c.id}">Создать следующий промпт по отчёту</button>`:'<p class="notice">Для продолжения начните новую задачу с полным текстом.</p>'}</section>`;}
 
-function seeds(){return `<section class="hero"><h2>Общая база примеров</h2><p>Добавляйте свои скелеты один раз. Движок находит маркеры структуры: этапы, формат, проверки, примеры и продолжение диалога. Они влияют на выбор правил; исходный скелет выбирать не нужно.</p></section><div class="grid"><section class="panel"><form id="seed-form">${input('Название','title','','required maxlength="200"')}${area('Полный текст скелета','text','','required rows="10" spellcheck="false"')}${input('Категории через запятую','domains','general')}${input('Для какой модели создавался — необязательно','target_hint')}${area('Наблюдения и условия применения','notes')}<button class="primary">Добавить в базу</button></form><div class="divider"></div><label>Импорт TXT, MD, JSON, JSONL<input id="seed-files" type="file" multiple accept=".txt,.md,.json,.jsonl"></label><button data-import-seeds>Импортировать файлы</button></section><section class="panel"><h2>Примеры · ${state.seeds.length}</h2>${state.seeds.length?state.seeds.map(s=>`<details class="entry"><summary>${esc(s.title)}</summary><p class="help">${esc(s.domains.join(' · '))}${s.target_hint?' · '+esc(s.target_hint):''}</p><pre>${esc(s.text)}</pre><p>${esc(s.notes)}</p><p class="help">Найденные маркеры: ${esc(PromptLab.localFeatures(s).join(', ')||'нет известных маркеров')}</p></details>`).join(''):empty('База пока пуста. Генерация доступна и без готовых примеров.')}<p class="help">Текст скелета сам по себе не доказывает работоспособность. Эффективность оценивается по сохранённым отчётам.</p></section></div>`;}
+function seeds(){return `<section class="hero"><h2>База исходных примеров</h2><p>Загрузите скелеты и кожи один раз. Поиск сам использует извлечённые части; выбирать исходный скелет для каждой генерации не нужно.</p></section><div class="grid"><section class="panel"><form id="seed-form">${input('Название','title','','required maxlength="200"')}${area('Полный исходный текст','text','','required rows="10" spellcheck="false"')}${input('Категории через запятую','domains','general')}${input('Для какой модели создавался — необязательно','target_hint')}${area('Наблюдения и условия применения','notes')}<button class="primary">Добавить в базу</button></form><div class="divider"></div><label>Импорт TXT, MD, JSON, JSONL<input id="seed-files" type="file" multiple accept=".txt,.md,.json,.jsonl"></label><button data-import-seeds>Импортировать файлы</button></section><section class="panel"><h2>Примеры · ${state.seeds.length}</h2>${state.seeds.length?state.seeds.map(s=>{const parsed=PromptLab.parseReference(s);return `<details class="entry"><summary>${esc(s.title)}${s.enabled===false?' · отключён':''}</summary><p class="help">${esc(s.domains.join(' · '))}${s.target_hint?' · '+esc(s.target_hint):''}</p><pre>${esc(s.text)}</pre><p>${esc(s.notes)}</p><p>Извлечено фрагментов: ${parsed.fragments.length}.</p><ul>${parsed.fragments.map(f=>`<li>${esc(PromptLab.searchSlots[f.slot])}: ${esc(f.text.slice(0,140))}</li>`).join('')}</ul>${parsed.excluded.map(x=>`<p class="help">Не использован фрагмент ${x.index+1}: ${esc(x.reason)}</p>`).join('')}<button class="small" data-toggle-seed="${s.id}">${s.enabled===false?'Включить в поиск':'Отключить от поиска'}</button></details>`;}).join(''):empty('База пока пуста. Доступны общие конструкции; проверенных джейлбрейков в поставке нет.')}<p class="help">Разбор фрагментов выполняется эвристически. Исходники сохраняются полностью. Наличие примера не доказывает его эффективность.</p></section></div>`;}
+
 function history(){return `<section class="panel"><h2>Проекты и отчёты</h2>${state.campaigns.length?state.campaigns.map(c=>`<div class="entry"><div class="row spread"><h3>${esc(c.target_snapshot.title)} · ${esc(c.domain)}</h3><button data-open-campaign="${c.id}">Открыть текущую работу</button></div><p class="help">${c.persona?'Персона '+esc(c.persona)+' · ':''}${esc(c.created)}</p><p>${esc(c.objective||'Задача не была указана в старой версии')}</p>${state.attempts.filter(a=>a.campaign_id===c.id).map(a=>{const r=report(a);return `<details><summary>Промпт ${a.number} · ${r?.status==='complete'?esc(outcomes[r.outcome]):'Отчёт не завершён'}</summary><pre>${esc(a.prompt)}</pre><p>${esc(a.strategy.why_changed)}</p>${r?`<p>Установка: ${esc(r.setup.decision)}</p><pre>${esc(r.setup.response)}</pre>${turnsList(r)}`:''}</details>`;}).join('')}</div>`).join(''):empty('После первой генерации здесь появится история.')}<p class="help">Неудачные версии остаются в истории и передаются как отрицательный опыт.</p></section>${legacyPanel()}`;}
 function legacyPanel(){if(!state.candidates.length&&!state.runs.length)return '';return `<section class="panel"><h2>Архив предыдущей версии</h2><p class="help">Ранние скелеты и диалоги сохранены. Наблюдения по той же модели и категории доступны новому генератору.</p>${state.runs.map(r=>`<details><summary>${esc(r.target_snapshot.title)} · ${esc(r.task_snapshot.domain)} · ${esc(r.created)}</summary><p>${esc(r.task_snapshot.objective)}</p>${r.messages.map(m=>`<p class="help">${esc(m.role)} · ${esc(m.purpose)}</p><pre>${esc(m.content)}</pre>`).join('')}</details>`).join('')}<details><summary>Ранние промпты · ${state.candidates.length}</summary>${state.candidates.map(c=>`<h3>${esc(c.title)}</h3><pre>${esc(c.compiled)}</pre>`).join('')}</details></section>`;}
-function settings(){return `<div class="grid"><section class="panel"><h2>Движок правил</h2><p>Генерация целиком выполняется на устройстве. Сетевые вызовы моделей отключены.</p><p class="help">Версия правил: ${esc(PromptLab.localVersion)}. ${PromptLab.localRecipes.length} структур с разными порядками работы. Выбор учитывает задачу, примеры, этап отказа и реальные отчёты.</p><ul>${PromptLab.localRecipes.map(r=>`<li>${esc(r.name)}</li>`).join('')}</ul><p class="help">Название целевой модели разделяет историю испытаний. Само имя не задаёт «уровень защиты».</p></section><section class="panel"><h2>Целевые модели</h2><form id="target-form">${input('Название модели','model','','required maxlength="200" placeholder="Своя модель"')}${input('Версия или условия проверки','version','профиль')}${area('Наблюдения — необязательно','notes')}<button>Добавить модель</button></form>${state.targets.map(t=>`<div class="entry"><strong>${esc(t.title)}</strong><p class="help">${esc(t.version)}</p></div>`).join('')}</section></div>`;}
+function settings(){return `<div class="grid"><section class="panel"><h2>Движок составного поиска</h2><p>Версия ${esc(PromptLab.searchVersion)}. Сетевые вызовы моделей отключены.</p><p>Изменение компонентов, сочетание частей прежних структур и поиск новых комбинаций работают совместно. В одной порции проверяется ограниченное число вариантов; позиция сохраняется для продолжения.</p><ul>${Object.values(PromptLab.searchSlots).map(name=>`<li>${esc(name)}</li>`).join('')}</ul><p class="help">Название модели разделяет опыт испытаний. Само имя не раскрывает уровень защиты.</p></section><section class="panel"><h2>Целевые модели</h2><form id="target-form">${input('Название модели','model','','required maxlength="200" placeholder="Своя модель"')}${input('Версия или условия проверки','version','профиль')}${area('Наблюдения — необязательно','notes')}<button>Добавить модель</button></form>${state.targets.map(t=>`<div class="entry"><strong>${esc(t.title)}</strong><p class="help">${esc(t.version)}</p></div>`).join('')}</section></div>`;}
 
 function dataView(){return `<div class="grid"><section class="panel"><h2>Сохранение и перенос</h2><p>${temporary?'Записи находятся только в памяти текущей вкладки. Скачайте резервную копию перед закрытием или обновлением страницы.':'База примеров, промпты, фактические ответы и отчёты хранятся в браузере на этом устройстве.'}</p><button class="primary" data-export>Скачать резервную копию</button><p class="help">Скачайте копию перед очисткой данных браузера или сменой адреса сайта. Ключи API не экспортируются.</p><div class="divider"></div><form id="restore-form"><label>Резервная копия<input id="backup-file" type="file" accept=".json" required></label><label class="check-label"><input name="confirm_replace" type="checkbox" required>Заменить текущие данные выбранной копией</label><button>Восстановить</button></form><p class="help">Поддерживаются резервные копии предыдущих версий.</p></section><section class="panel"><h2>Один HTML для телефона</h2><ol><li>Замените index.html в корне своего репозитория.</li><li>GitHub Pages: main → /(root).</li><li>После публикации обновите страницу сайта.</li></ol><p>${temporary?'Сейчас включён временный режим: скачайте копию перед закрытием страницы.':'Промпты и отчёты остаются после обновления сайта при том же адресе и браузере.'}</p><button data-persist>Запросить постоянное хранение</button><p class="help">Вся логика сборки находится в этом HTML. Генерация не требует API или интернета после загрузки страницы. Испытание промпта проводится вами в целевой модели.</p></section></div>`;}
 const views={generator,seeds,history,settings,data:dataView};
@@ -676,10 +755,11 @@ document.addEventListener('click',async event=>{
   if(d.copyAttempt){await copy(state.attempts.find(a=>a.id===d.copyAttempt).prompt);return;}
   if(d.persist!==undefined){const ok=await navigator.storage?.persist?.();toast(ok?'Постоянное хранение предоставлено':'Браузер оставил обычный режим хранения');return;}
   button.disabled=true;
+  if(d.toggleSeed){const seed=state.seeds.find(x=>x.id===d.toggleSeed);await api('/api/seeds/toggle',{seed_id:seed.id,revision:seed.revision});await load();return;}
   if(d.importSeeds!==undefined){const files=[...$('#seed-files').files];if(!files.length)throw Error('Выберите файлы');await api('/api/seeds/import',{files:await Promise.all(files.map(async f=>({name:f.name,content:await f.text()})))});await load();toast('Примеры добавлены');return;}
   if(d.startJob){await api('/api/jobs/start',{job_id:d.startJob});await load();return;}
   if(d.stopJob||d.cancelJob){await api(d.stopJob?'/api/jobs/interrupt':'/api/jobs/cancel',{job_id:d.stopJob||d.cancelJob});await load();return;}
-  if(d.finish||d.saveReport){const a=state.attempts.find(x=>x.id===(d.finish||d.saveReport));await api('/api/simple/finish',{attempt_id:a.id,revision:a.revision});discard('task-'+a.id);await load();if(d.finish&&current()?.objective&&PromptLab.localChoices(state,current()).available.length)await next(current());else toast(d.finish?'Отчёт сохранён. Доступные структуры исчерпаны.':'Полный отчёт сохранён');return;}
+  if(d.finish||d.saveReport){const a=state.attempts.find(x=>x.id===(d.finish||d.saveReport));await api('/api/simple/finish',{attempt_id:a.id,revision:a.revision});discard('task-'+a.id);await load();if(d.finish&&current()?.objective)await next(current());else toast('Полный отчёт сохранён');return;}
   if(d.next){await next(state.campaigns.find(c=>c.id===d.next));return;}
  }catch(error){handleError(error);}finally{button.disabled=false;}
 });
@@ -687,7 +767,7 @@ document.addEventListener('submit',async event=>{
  event.preventDefault();const form=event.target,button=event.submitter,data=Object.fromEntries(new FormData(form));capture(form);if(button)button.disabled=true;
  try{
   let message='Сохранено';
-  if(form.id==='start-form'){data.channel='local';if(!data.objective?.trim())throw Error('Опишите задачу, для которой нужен промпт');const result=await api('/api/simple/start',data);selectedCampaign=result.campaign_id;startExpanded=false;returnToTask=false;remember();message='Промпт собран локально';}
+  if(form.id==='start-form'){data.channel='local';if(!data.objective?.trim())throw Error('Опишите задачу, для которой нужен промпт');const result=await api('/api/simple/start',data);selectedCampaign=result.campaign_id;startExpanded=false;returnToTask=false;remember();message=result.paused?'Позиция поиска сохранена':'Новая структура собрана';}
   else if(form.dataset.form==='setup'||form.dataset.form==='task'){const a=state.attempts.find(x=>x.id===form.dataset.attempt);await api('/api/simple/'+form.dataset.form,{...data,attempt_id:a.id,revision:a.revision});}
   else if(form.id==='retry-form'){await next(current(),data.channel);discard(form.id);return;}
   else if(form.id==='seed-form'){await api('/api/seeds',{...data,domains:data.domains.split(',').map(x=>x.trim()).filter(Boolean)});}
