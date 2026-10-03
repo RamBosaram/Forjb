@@ -20,6 +20,8 @@
 .pipeline{display:flex;gap:8px;flex-wrap:wrap;margin:18px 0}.prompt-output{max-height:560px;font-size:14px}.panel>form>button{margin-top:16px}.panel>form>label>input,.panel>form>label>select,.panel>form>label>textarea{margin-top:5px}form .grid>label{min-width:0}[hidden]{display:none!important}
 
 .objective-summary{border-left:3px solid var(--accent);padding:4px 0 4px 14px;margin:12px 0 20px}.objective-summary>strong{font-size:12px;color:var(--muted)}.objective-summary>p{white-space:pre-wrap;max-height:220px;overflow:auto;margin:6px 0 0}.manual-mode{margin-top:22px;padding-top:12px;border-top:1px solid var(--line)}
+.model-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:12px;max-height:560px;overflow-y:auto;margin:16px 0;padding:2px}.model-card{position:relative;text-align:left;display:flex;flex-direction:column;align-items:flex-start;gap:9px;padding:35px 17px 17px;min-width:0;min-height:180px;background:#14211c;overflow-wrap:anywhere}.model-card.selected{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}.model-card strong{font-size:16px}.model-card>span:last-child{margin-top:auto;color:var(--accent);font-size:12px}.model-id,.model-reasons{color:var(--muted);font-size:12px}.best-badge{position:absolute;right:9px;top:8px;background:var(--accent);color:var(--ink);border-radius:4px;padding:2px 7px;font-size:11px;font-weight:750}.model-picker .actions,.connections-panel .actions{display:flex;gap:8px;flex-wrap:wrap}.model-picker>summary{font-weight:650}.draft-panel{border-top:1px solid var(--line);padding-top:12px}.review-panel{padding:12px;border:1px solid #645238;border-radius:7px}.review-panel li{margin-bottom:12px}.vault-panel form{max-width:580px}button:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+@media(max-width:600px){.model-grid{grid-template-columns:minmax(0,1fr);max-height:530px}.model-card{min-height:155px}.model-picker .actions>button{flex:1 1 120px}.review-panel{padding:9px}}
 
 </style></head>
 <body>
@@ -29,9 +31,9 @@
       <button data-nav="generator">Генератор</button><button data-nav="seeds">База примеров <span id="seed-count">0</span></button>
       <button data-nav="history">История</button><button data-nav="settings">Настройки</button><button data-nav="data">Данные</button>
     </nav>
-    <div class="sidebar-bottom"><span class="dot"></span> Данные на этом устройстве<a href="#" data-export>Резервная копия ↓</a><small>PromptLab HTML 0.8.0</small></div>
+    <div class="sidebar-bottom"><span class="dot"></span> Данные на этом устройстве<a href="#" data-export>Резервная копия ↓</a><small>PromptLab HTML 0.9.0</small></div>
   </aside>
-  <main><header><button id="menu-toggle" class="small" aria-label="Открыть меню" aria-controls="side-nav" aria-expanded="false">☰</button><div><div class="eyebrow">WORKSPACE / PROMPT ENGINEERING</div><h1 id="page-title">Генератор</h1></div><div class="row"><button class="small" id="refresh">Обновить</button><span class="status" id="connection">Подключение</span></div></header><section id="storage-banner" class="notice storage-notice" role="status" hidden></section><div id="app" aria-live="polite"></div></main>
+  <main><header><button id="menu-toggle" class="small" aria-label="Открыть меню" aria-controls="side-nav" aria-expanded="false">☰</button><div><div class="eyebrow">WORKSPACE / PROMPT ENGINEERING</div><h1 id="page-title">Генератор</h1></div><div class="row"><button class="small" id="refresh">Обновить</button><span class="status" id="connection">Подключение</span></div></header><section id="storage-banner" class="notice storage-notice" role="status" hidden></section><section id="routing-banner" class="notice success" role="status" hidden></section><div id="app" aria-live="polite"></div></main>
   <div id="toast" role="status" hidden></div>
 <noscript>Включите JavaScript и откройте ссылку GitHub Pages в браузере.</noscript><script>
 "use strict";
@@ -105,6 +107,7 @@ class IndexedStore{
  read(){return this.transact(false,s=>s);}
  mutate(fn){return this.transact(true,fn);}
  secret(ref,value){return new Promise((resolve,reject)=>{const write=value!==undefined,tx=this.db.transaction('secrets',write?'readwrite':'readonly'),store=tx.objectStore('secrets');let result;const req=write?(value?store.put(value,ref):store.delete(ref)):store.get(ref);req.onsuccess=()=>{result=req.result;};tx.oncomplete=()=>resolve(result||'');tx.onabort=()=>reject(tx.error||Error('Не удалось сохранить ключ'));}).catch(error=>{throw storageError(error);});}
+ ensureSecret(ref,value){return new Promise((resolve,reject)=>{const tx=this.db.transaction('secrets','readwrite'),store=tx.objectStore('secrets'),req=store.get(ref);let result;req.onsuccess=()=>{result=req.result||value;if(!req.result)store.put(value,ref);};tx.oncomplete=()=>resolve(result);tx.onabort=()=>reject(tx.error||Error('Не удалось создать хранилище ключей'));}).catch(error=>{throw storageError(error);});}
 }
 class MemoryStore{
  constructor(state=fresh()){this.data=clone(state);this.secrets=new Map();this.tail=Promise.resolve();}
@@ -112,6 +115,7 @@ class MemoryStore{
  read(){return this.tail.then(()=>clone(this.data));}
  mutate(fn){const next=this.tail.then(()=>{const state=clone(this.data),result=fn(state);if(result?.then)throw Error('Async transaction');state.revision++;this.data=state;return clone(result);});this.tail=next.catch(()=>{});return next;}
  async secret(ref,value){if(value!==undefined){if(value)this.secrets.set(ref,value);else this.secrets.delete(ref);}return this.secrets.get(ref)||'';}
+ async ensureSecret(ref,value){if(!this.secrets.has(ref))this.secrets.set(ref,value);return this.secrets.get(ref);}
 }
 function latestReviews(s,run){const latest=new Map();for(const r of s.reviews)if(r.run_id===run.id&&!latest.has(r.message_id))latest.set(r.message_id,r);return run.messages.filter(m=>m.role==='assistant'&&m.purpose!=='setup'&&latest.has(m.id)).map(m=>latest.get(m.id));}
 function summary(s){const groups=new Map();for(const run of s.runs){const reviews=latestReviews(s,run);if(!reviews.length)continue;const t=run.task_snapshot,key=JSON.stringify([run.candidate_id,run.target_id,t.domain,t.split,run.protocol]);if(!groups.has(key))groups.set(key,{candidate_id:run.candidate_id,target_id:run.target_id,domain:t.domain,split:t.split,protocol:run.protocol,reviewed_turns:0,known_turns:0,successful_turns:0,boundary_yes:0,complete_runs:0,successful_runs:0,task_ids:[]});const g=groups.get(key),known=reviews.filter(r=>r.completion!=='unknown'&&r.correctness!=='unknown'),success=r=>r.completion==='full'&&r.correctness==='correct';if(!g.task_ids.includes(run.task_id))g.task_ids.push(run.task_id);g.reviewed_turns+=reviews.length;g.known_turns+=known.length;g.successful_turns+=known.filter(success).length;g.boundary_yes+=reviews.filter(r=>r.boundary==='yes').length;if(known.length===run.plan.filter(p=>p.purpose!=='setup').length){g.complete_runs++;if(known.every(success))g.successful_runs++;}}return [...groups.values()];}
@@ -704,7 +708,7 @@ function retryTime(response,body){
 function apiFailure(response,body){
  const status=Number(body?.error?.code)||response.status,meta=body?.error?.metadata||{},message=String(body?.error?.message||'');
  if(status===401||status===403)return new APIError('Ключ не принят или доступ запрещён. Проверьте ключ и доступ к API.',{status,code:'auth',global:true});
- if(status===402)return new APIError('Провайдер отклонил запрос из-за баланса или лимита аккаунта. Платная модель автоматически не выбирается.',{status,code:'account',global:true});
+ if(status===402)return new APIError('Провайдер отклонил запрос из-за баланса или лимита. Платная модель автоматически не выбирается.',{status,code:meta.limit_source==='openrouter_key_limit'?'rate_key':'account',global:true});
  if(status===429){const account=response.headers?.get?.('x-ratelimit-limit')!=null||/daily|per.day|free.*limit|account.*limit|requests per minute/i.test(message)||!meta.provider_name&&!meta.provider_code;
   return new APIError(account?'Достигнут лимит аккаунта. Этапы сохранены; продолжите после сброса лимита.':'Модель перегружена. Пробую следующую доступную.',{status,code:account?'rate_account':'rate_model',global:account,retryable:!account,retryAt:retryTime(response,body)});}
  if([404,408,502,503,504,529].includes(status)||status>=500)return new APIError('Модель недоступна, HTTP '+status,{status,code:'capacity',retryable:true,retryAt:now()+60000});
@@ -720,7 +724,7 @@ class ProviderClient{
   signal?.addEventListener('abort',cancel,{once:true});const timer=setTimeout(()=>{timedOut=true;controller.abort();},timeout);
   try{
    const response=await this.fetch(endpoint(provider)+path,{method:body?'POST':'GET',headers:{'Authorization':'Bearer '+key,...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined,signal:controller.signal,redirect:'error',credentials:'omit',cache:'no-store'});
-   let value;try{value=await response.json();}catch{throw new APIError('API вернул нечитаемый ответ, HTTP '+response.status,{code:'response',retryable:response.status>=500});}
+   let value;try{value=await response.json();}catch{if(!response.ok)throw apiFailure(response,{});throw new APIError('API вернул нечитаемый ответ, HTTP '+response.status,{code:'response',retryable:true});}
    if(!response.ok||value.error)throw apiFailure(response,value);
    return value;
   }catch(error){
@@ -746,6 +750,113 @@ class ProviderClient{
 }
 const api={PROVIDERS,ProviderClient,APIError,endpoint,validKey,freeModel,catalogRows,rankModels};root.PromptProviders=api;if(typeof module!=='undefined'&&module.exports)module.exports=api;
 })(globalThis);
+
+</script><script>
+"use strict";
+(function(root){
+const enc=()=>new TextEncoder(),dec=()=>new TextDecoder();
+const b64=bytes=>root.btoa(String.fromCharCode(...new Uint8Array(bytes)));
+const bytes=s=>Uint8Array.from(root.atob(s),c=>c.charCodeAt(0));
+class KeyVault{
+ constructor(store){this.store=store;this.memory=new Map();this.devicePromise=null;}
+ async device(){
+  if(!root.crypto?.subtle)throw Error('Для зашифрованного сохранения откройте HTTPS-адрес GitHub Pages');
+  if(!this.devicePromise)this.devicePromise=(async()=>{
+   const saved=await this.store.secret('vault-device-v1');if(saved)return saved;
+   const key=await root.crypto.subtle.generateKey({name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+   return this.store.ensureSecret('vault-device-v1',key);
+  })().catch(e=>{this.devicePromise=null;throw e;});
+  return this.devicePromise;
+ }
+ async put(ref,value,remember=true){
+  if(remember){const key=await this.device(),iv=root.crypto.getRandomValues(new Uint8Array(12));
+   const ciphertext=await root.crypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:enc().encode(ref)},key,enc().encode(value));
+   await this.store.secret(ref,{version:1,iv:b64(iv),ciphertext:b64(ciphertext)});
+  }else await this.store.secret(ref,'');
+  this.memory.set(ref,value);
+ }
+ async get(ref){
+  if(this.memory.has(ref))return this.memory.get(ref);
+  const envelope=await this.store.secret(ref);if(!envelope)return '';
+  if(typeof envelope==='string')return envelope; // v0.8 compatibility; migrated on explicit save.
+  if(envelope.version!==1)throw Error('Неизвестная версия хранилища ключей');
+  try{const data=await root.crypto.subtle.decrypt({name:'AES-GCM',iv:bytes(envelope.iv),additionalData:enc().encode(ref)},await this.device(),bytes(envelope.ciphertext));const value=dec().decode(data);this.memory.set(ref,value);return value;}catch(error){if(error.isStorageError)throw error;throw Error('Ключ на устройстве не удалось расшифровать. Разблокируйте встроенный набор заново.');}
+ }
+ async remove(ref){this.memory.delete(ref);await this.store.secret(ref,'');}
+ async unlock(passphrase,pack){
+  if(!root.crypto?.subtle)throw Error('Откройте HTTPS-адрес GitHub Pages');
+  if(!pack||pack.version!==1||pack.iterations!==250000)throw Error('Неподдерживаемый зашифрованный набор');
+  try{
+   const material=await root.crypto.subtle.importKey('raw',enc().encode(String(passphrase).trim()),'PBKDF2',false,['deriveKey']);
+   const key=await root.crypto.subtle.deriveKey({name:'PBKDF2',salt:bytes(pack.salt),iterations:pack.iterations,hash:'SHA-256'},material,{name:'AES-GCM',length:256},false,['decrypt']);
+   const raw=await root.crypto.subtle.decrypt({name:'AES-GCM',iv:bytes(pack.iv),additionalData:enc().encode('promptlab-embedded-v1')},key,bytes(pack.ciphertext));
+   const data=JSON.parse(dec().decode(raw));if(!Array.isArray(data.entries)||data.entries.length>20)throw Error();return data.entries;
+  }catch{throw Error('Код разблокировки неверен или зашифрованный набор повреждён');}
+ }
+}
+const api={KeyVault};root.PromptVault=api;if(typeof module!=='undefined'&&module.exports)module.exports=api;
+})(globalThis);
+
+</script><script>
+"use strict";
+(function(root){
+const P=root.PromptProviders||(typeof require==='function'?require('./providers.js'):null);
+function pool(state){const seen=new Set();return state.settings.filter(c=>{if(c.generator_version!=='ai-1'||c.enabled===false||seen.has(c.key_ref))return false;seen.add(c.key_ref);return true;}).sort((a,b)=>Number(Boolean(b.primary))-Number(Boolean(a.primary)));}
+function label(c){return c.label||P.PROVIDERS[c.provider]?.label||'Подключение';}
+const reasons={rate_account:'общий лимит аккаунта',rate_key:'лимит отдельного ключа',rate_model:'перегрузка модели',auth:'ключ не принят',account:'ограничение аккаунта',network:'сервис недоступен из браузера',capacity:'модели перегружены',no_model:'нет подходящей модели',invalid_output:'ответ не прошёл проверку',timeout:'время ожидания истекло',missing_key:'ключ отсутствует на устройстве'};
+class ConnectionRouter{
+ constructor(engine,job,live,signal){this.engine=engine;this.job=job;this.live=live;this.signal=signal;this.current=null;this.previous=null;this.lastError=null;this.skipped=new Set();this.cache=new Map();}
+ async notice(from,to,code){
+  if(!from||from.id===to.id)return;
+  const event={id:root.crypto.randomUUID(),type:'switch',from:label(from),to:label(to),code,message:'Переключено: '+label(from)+' → '+label(to)+' · '+(reasons[code]||'резервное подключение'),created:new Date().toISOString()};
+  await this.live((s,j)=>{(j.notifications??=[]).push(event);return true;});this.engine.onChange();
+ }
+ async failed(error,connection=this.current?.cfg){
+  if(!connection)throw error;
+  this.previous=connection;this.lastError=error;this.skipped.add(connection.id);this.current=null;
+  const permanent=error.code==='auth'||error.code==='missing_key',shared=['rate_account','account','network'].includes(error.code);
+  const retry=error.retryAt>Date.now()?error.retryAt:shared||error.code==='rate_key'?Date.now()+60000:0;
+  await this.live((s,j)=>{
+   for(const c of pool(s)){const same=shared?c.provider===connection.provider&&(c.quota_group||c.provider)===(connection.quota_group||connection.provider):c.id===connection.id;
+    if(!same)continue;
+    if(permanent)c.key_status='unavailable';
+    if(retry)c.cooldown_until=Math.max(c.cooldown_until||0,retry);
+    c.last_error=error.code||'api';
+   }
+   (j.telemetry??=[]).push({stage:j.stage,connection:label(connection),provider:connection.provider,code:error.code||'api',status:error.status||0,retry_at:retry,created:new Date().toISOString()});return true;
+  });
+ }
+ async select(){
+  if(this.signal.aborted)throw new P.APIError('Операция остановлена',{code:'cancelled'});
+  if(this.current)return this.current;
+  for(let hops=0;hops<20;hops++){
+   const state=await this.engine.store.read(),all=pool(state);
+   const choices=all.filter(c=>!this.skipped.has(c.id)&&c.key_status!=='unavailable'&&!(c.cooldown_until>Date.now())).sort((a,b)=>Number(b.id===this.job.input.config.id)-Number(a.id===this.job.input.config.id));
+   const cfg=choices[0];if(!cfg){
+    const retryAt=Math.min(...all.filter(c=>c.key_status!=='unavailable'&&c.cooldown_until>Date.now()).map(c=>c.cooldown_until));
+    throw new P.APIError('Все подключения сейчас недоступны. Завершённые этапы сохранены.'+(Number.isFinite(retryAt)?' Автоматический повтор после сброса ограничения.':' Проверьте набор ключей.'),{code:'pool_exhausted',retryAt:Number.isFinite(retryAt)?retryAt:0});
+   }
+   try{
+    const key=await this.engine.credentialKey(cfg);if(!key)throw new P.APIError('Ключ отсутствует на устройстве',{code:'missing_key'});
+    let cached=this.cache.get(cfg.id);
+    if(!cached){const quota=await this.engine.client.keyInfo(cfg.provider,key,this.signal);
+     if(quota?.remaining===0){const tomorrow=new Date();tomorrow.setUTCHours(24,0,5,0);throw new P.APIError('Дневная квота исчерпана',{code:'rate_account',global:true,retryAt:tomorrow.getTime()});}
+     const models=await this.engine.client.models(cfg.provider,key,this.signal);cached={models,quota};this.cache.set(cfg.id,cached);
+    }
+    await this.live((s,j)=>{const row=s.settings.find(x=>x.id===cfg.id);if(row){row.catalog=cached.models;row.catalog_at=Date.now();row.quota=cached.quota;row.key_status='ready';row.last_error=null;}j.current_connection=label(cfg);j.current_connection_id=cfg.id;return true;});
+    this.current={cfg,key,...cached};await this.notice(this.previous,cfg,this.lastError?.code);return this.current;
+   }catch(error){if(this.signal.aborted||error.code==='cancelled'||error.isStorageError)throw error;await this.failed(error,cfg);}
+  }
+  throw new P.APIError('Проверены все подключения; работа приостановлена',{code:'pool_exhausted'});
+ }
+}
+const api={pool,label,ConnectionRouter};root.PromptRouting=api;if(typeof module!=='undefined'&&module.exports)module.exports=api;
+})(globalThis);
+
+</script><script>
+"use strict";
+// Encrypted private bundle. Unlock code is delivered separately.
+globalThis.PromptEmbedded={"version":1,"count":6,"iterations":250000,"salt":"rLJVCSGF2mLKvkxjMu8IUA==","iv":"8N87bHj308I6PHWc","ciphertext":"0Yy7Xbiy2sVpiEje5dWDjm3T59ufrPL3xcA5NUhBxAydWVQwrd9NN1FHB8jPYqRpCbNoDIWS5G2PuteOlCpD4t/nu6/BVuQCw6yihd3qM2HRA7uk+V5HkhLNrHknNPwwd7oBGZQY0mSSEdPuGoRVVWix6X7CL36dDDJcPxXFHwR9MbYewwsiVqEmwCtdt3T1j+Phg6w5IR22wHlbALLHZbz88QwBcxST5lcQrufnxsLK+s48C0UqcO1U0/cDWOTd9Y4G5xTbkQ3qUrnVfJiqzu8BwD3I8VfNzN26DsjBu6OYGsjSN957mXdS4V/Gf1i/OEpnbWsP/uo6lmFIGsUNHBvqjfa4om3makDFQiKdQkSQfoIdjl8FHauc02CBs6AxUc/vOijzzGd72OLrUNw1gNHWjbcEO8RlVCuNHx57G/u45MhPyyyoTKHznf3pjvyBNSbL7F4qG93VGX2aIS5pckuVpDOZ27AXljkU8vv2Te3eLcAKIcx7nrHI9yzT6tNDKK+aGN6E2gV+oqjWmi8c63L7vpyorVpey4TJJYHJYTHvNXExTTvkrcMeXi4yx+X41aasC+/3U8mluZq5wUCjuaGcaXTLuNLqpbmwWTvkZGpHOIGYyUus6UBiR0iVH78Y8thWzcHI3clW2xi3RWegYqzFYogyCXheoTNSJAMRfZEX9Zp3cduiO9jR3qloLDEaHwhMmHkwPV8iyxHfXaDZOxpu4Tl13Xy6xgJsOG1Dh2e/4B0mklf9gUgWqucqoKv2RQQu6L/FnG85YtK+Um/K7wnobv9PkpLbP/NYQ6fqkgiuf4BbaboBH+qDGcDjcDcjI6Id+6K8kY9lRux3DzirLQzJA9WsIxjiPES6vSOu5BvxzCC7aN6/QJxGXrQnapBtRp7H2mtrnAafn0JdQRYTD8n76j//T+kYNZCXO10FbFu1PWfXH0wWXULS7zlK827OD0Ms27hovHAGxwcqglHHCJI6FBTvZvN+9vVwtjTEsHNmufVuQz7ymY1uH4jiUZupj28S8xgueZ1LLChkHT0TfrhiaYhtVR09aoT60f5apqZ/mZVdZFIqyByRL7PbpstSYpkCTgde6kEa9xNi0DbTjjHAsxRmmAKxp/cHObegFoRBGrvOG7OFr3DUws6285F66lZDWtDB5WuAwc75K74aJCZW7WxWejs/2zjEo6Jl0RRbZEP4uyjnJ4dRhrlLjcs96+EIAn7ywsU="};
 
 </script><script>
 "use strict";
@@ -804,30 +915,52 @@ const api={VERSION,DISTILL,GENERATE,CRITIQUE,json,parseCard,cacheKey,novelty,ove
 const B=root.PromptLab||(typeof require==='function'?require('./local.js'):null);
 const P=root.PromptProviders||(typeof require==='function'?require('./providers.js'):null);
 const K=root.PromptKnowledge||(typeof require==='function'?require('./knowledge.js'):null);
+const V=root.PromptVault||(typeof require==='function'?require('./vault.js'):null);
+const R=root.PromptRouting||(typeof require==='function'?require('./routing.js'):null);
 const clone=x=>JSON.parse(JSON.stringify(x)),stamp=()=>new Date().toISOString();
 const uid=()=>{const b=new Uint8Array(16);root.crypto.getRandomValues(b);return [...b].map(x=>x.toString(16).padStart(2,'0')).join('');};
 function add(s,kind,value){const row={...clone(value),id:uid(),revision:0,seq:++s.clock,created:stamp()};s[kind].unshift(row);return row;}
-function config(s){return s.settings.find(x=>x.generator_version==='ai-1');}
+function config(s){return R.pool(s)[0];}
 function selectedSources(s,c){return s.seeds.filter(x=>x.enabled!==false).map((seed,index)=>({seed,index,score:(seed.domains.includes(c.domain)?4:seed.domains.includes('general')?1:0)+(seed.target_hint&&c.target_snapshot.title.toLowerCase().includes(seed.target_hint.toLowerCase())?3:0)})).sort((a,b)=>b.score-a.score||a.index-b.index).map(x=>clone(x.seed));}
 class AIEngine extends B.SearchEngine{
- constructor(store,options){super(store,options);this.client=new P.ProviderClient(this.fetchImpl);this.providerKeys=new Map();}
- async saveProviderKey(provider,key,remember){
-  P.endpoint(provider);P.validKey(key);const ref='promptlab-ai-'+provider;
-  await this.store.secret(ref,remember?key:'');this.providerKeys.set(provider,key);
+ constructor(store,options){super(store,options);this.client=new P.ProviderClient(this.fetchImpl);this.providerKeys=new Map();this.vault=new V.KeyVault(store);}
+ async credentialKey(cfg){
+  const stored=await this.vault.get(cfg.key_ref);if(stored)return P.validKey(stored);
+  if(cfg.key_ref==='promptlab-ai-'+cfg.provider)return this.providerKeys.get(cfg.provider)||'';
+  return '';
  }
- async providerKey(provider){const key=this.providerKeys.get(provider)||await this.store.secret('promptlab-ai-'+provider);if(!key)throw Error('В настройках введите полный ключ '+P.PROVIDERS[provider].label);return P.validKey(key);}
+ async providerKey(provider){const s=await this.store.read();for(const c of R.pool(s).filter(x=>x.provider===provider)){const key=await this.credentialKey(c);if(key)return key;}throw Error('Разблокируйте набор или добавьте полный ключ '+P.PROVIDERS[provider].label);}
+ async ensureCredentials(s){for(const c of R.pool(s))if(await this.credentialKey(c))return true;throw Error('Разблокируйте встроенный набор ключей или добавьте полный ключ в настройках');}
+ async state(){const s=await super.state(),available=[];for(const c of R.pool(s)){try{if(await this.credentialKey(c))available.push(c.id);}catch(error){if(error.isStorageError)throw error;}}return {...s,keyring:{available,embedded:Boolean(root.PromptEmbedded),embedded_count:root.PromptEmbedded?.count||0}};}
+ async addCredentials(entries,{remember=true,embedded=false}={}){
+  if(this.active.size)throw Error('Дождитесь окончания генерации');if(!Array.isArray(entries)||!entries.length||entries.length>20)throw Error('Добавьте от 1 до 20 ключей');
+  const before=await this.store.read(),rows=[];
+  for(const e of entries){P.endpoint(e.provider);const key=P.validKey(String(e.api_key||'').trim()),fingerprint=B.sha256(e.provider+'|'+key),ref='vault-'+fingerprint.slice(0,40);const max=Number(e.max_tokens||8192);if(!Number.isInteger(max)||max<2048||max>16384)throw Error('Лимит ответа: от 2048 до 16384 токенов');const model=String(e.model||'auto');if(model.length>300)throw Error('ID модели слишком длинный');rows.push({key,ref,fingerprint,provider:e.provider,model,max_tokens:max,label:String(e.label||e.provider).slice(0,100),catalog:e.catalog||[],quota:e.quota||null});}
+  if(new Set([...R.pool(before).map(x=>x.key_ref),...rows.map(x=>x.ref)]).size>20)throw Error('В наборе может быть до 20 ключей');
+  for(const r of rows)await this.vault.put(r.ref,r.key,remember);
+  return this.store.mutate(s=>{const saved=[];for(const r of [...rows].reverse()){
+   const old=s.settings.find(x=>x.key_ref===r.ref);const value={generator_version:'ai-1',provider:r.provider,base_url:P.endpoint(r.provider),model:r.model,key_ref:r.ref,fingerprint:r.fingerprint,label:r.label,quota_group:r.provider,enabled:true,key_status:'ready',cooldown_until:0,embedded,max_tokens:r.max_tokens,context_chars:100000,timeout:180,json_mode:true,temperature:0.6,catalog:r.catalog,catalog_at:r.catalog.length?Date.now():0,quota:r.quota,stats:old?.stats||{},remember_key:remember};
+   if(old){Object.assign(old,value);old.revision++;old.updated=stamp();saved.push(old.id);}else saved.push(add(s,'settings',value).id);
+  }return {saved:saved.length,ids:saved.reverse()};});
+ }
+ async unlockEmbedded(d){if(!root.PromptEmbedded)throw Error('Встроенного набора нет');const entries=await this.vault.unlock(d.passphrase,root.PromptEmbedded);return this.addCredentials(entries,{remember:d.remember_key!==false,embedded:true});}
+ async autoTick(){if(this.active.size)return;const s=await this.store.read(),job=s.jobs.find(j=>j.status==='failed'&&j.error_code==='pool_exhausted'&&j.retry_at>0&&j.retry_at<=Date.now()&&s.campaigns.some(c=>c.current_job_id===j.id));if(!job)return;try{await this.ensureCredentials(s);}catch(error){if(error.isStorageError)throw error;return;}return this.resume({job_id:job.id});}
  async request(path,data){
+  if(path==='/api/ai/unlock')return this.unlockEmbedded(data);
+  if(path==='/api/ai/auto')return this.autoTick();
+  if(path==='/api/ai/toggle'){if(this.active.size)throw Error('Остановите генерацию перед изменением набора');return this.store.mutate(s=>{const c=s.settings.find(x=>x.id===data.id&&x.generator_version==='ai-1');if(!c)throw Error('Подключение не найдено');c.enabled=data.retry===true||c.enabled===false;if(c.enabled){c.key_status='ready';c.cooldown_until=0;}return true;});}
   if(path==='/api/ai/connect')return this.connect(data);
-  if(path==='/api/ai/models')return this.refreshModels();
+  if(path==='/api/ai/models')return this.refreshModels(data||{});
+  if(path==='/api/ai/select')return this.selectModel(data);
   if(path==='/api/ai/forget'){
    if(this.active.size)throw Error('Остановите генерацию перед удалением ключа');
-   P.endpoint(data.provider);this.providerKeys.delete(data.provider);await this.store.secret('promptlab-ai-'+data.provider,'');return {removed:true};
+   const s=await this.store.read(),rows=s.settings.filter(c=>c.generator_version==='ai-1'&&(data.id?c.id===data.id:c.provider===data.provider));for(const c of rows)await this.vault.remove(c.key_ref);if(data.provider)this.providerKeys.delete(data.provider);await this.store.mutate(s=>{for(const c of s.settings)if(rows.some(x=>x.id===c.id))c.enabled=false;return true;});return {removed:true};
   }
   if(path==='/api/ai/resume')return this.resume(data);
   if(path.startsWith('/api/simple/')){
    if(['/api/simple/start','/api/simple/next','/api/simple/retry'].includes(path)){
     const s=await this.store.read(),c=s.campaigns.find(x=>x.id===data?.campaign_id),channel=data?.channel||c?.channel||(config(s)?'api':'local');
-    data={...data,channel};if(channel==='api'){if(this.active.size)throw Error('Дождитесь текущей генерации или остановите её');const cfg=config(s);if(!cfg)throw Error('Откройте настройки и подключите API');await this.providerKey(cfg.provider);}
+    data={...data,channel};if(channel==='api'){if(this.active.size)throw Error('Дождитесь текущей генерации или остановите её');const cfg=config(s);if(!cfg)throw Error('Откройте настройки и подключите API');await this.ensureCredentials(s);}
    }
    const result=await B.WorkflowEngine.prototype.request.call(this,path,data);
    if(path==='/api/simple/finish'||path==='/api/simple/setup')await this.creditReports();
@@ -836,17 +969,19 @@ class AIEngine extends B.SearchEngine{
   return super.request(path,data);
  }
  async connect(d){
-  if(this.active.size)throw Error('Сначала остановите текущую генерацию');
-  const provider=d.provider;P.endpoint(provider);const key=d.api_key?.trim()||await this.providerKey(provider);P.validKey(key);
-  const maxTokens=Number(d.max_tokens||8192);if(!Number.isInteger(maxTokens)||maxTokens<2048||maxTokens>16384)throw Error('Лимит ответа: от 2048 до 16384 токенов');
-  const quota=await this.client.keyInfo(provider,key),models=await this.client.models(provider,key);
-  if(!models.length)throw Error('В каталоге не найдено подходящих текстовых моделей');
-  const model=String(d.model||'auto').trim();if(model!=='auto'&&!models.some(m=>m.id===model))throw Error('Этого ID нет в актуальном каталоге');
-  await this.saveProviderKey(provider,key,d.remember_key===true);
-  return this.store.mutate(s=>{const old=s.settings.find(x=>x.generator_version==='ai-1'&&x.provider===provider);return add(s,'settings',{generator_version:'ai-1',provider,base_url:P.endpoint(provider),model,key_ref:'promptlab-ai-'+provider,max_tokens:maxTokens,context_chars:100000,timeout:180,json_mode:true,temperature:0.6,catalog:models,catalog_at:Date.now(),quota,stats:old?.stats||{},remember_key:d.remember_key===true});});
+  if(this.active.size)throw Error('Сначала остановите текущую генерацию');P.endpoint(d.provider);
+  const lines=String(d.api_keys||d.api_key||'').split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+  if(!lines.length)lines.push(await this.providerKey(d.provider));for(const key of lines)P.validKey(key);
+  const provider=d.provider,model=String(d.model||'auto').trim();let quota=null,models=[];
+  if(lines.length===1&&!d.api_keys){quota=await this.client.keyInfo(provider,lines[0]);models=await this.client.models(provider,lines[0]);if(!models.length)throw Error('В каталоге нет текстовых моделей');if(model!=='auto'&&!models.some(m=>m.id===model))throw Error('Этого ID нет в каталоге');}
+  return this.addCredentials(lines.map((key,i)=>({provider,api_key:key,model,max_tokens:d.max_tokens||8192,label:(d.label||provider)+(lines.length>1?' '+(i+1):''),catalog:models,quota})),{remember:d.remember_key===true});
  }
- async refreshModels(){
-  const s=await this.store.read(),cfg=config(s);if(!cfg)throw Error('Сначала подключите API');const key=await this.providerKey(cfg.provider),quota=await this.client.keyInfo(cfg.provider,key),models=await this.client.models(cfg.provider,key);
+ async selectModel(d){
+  if(this.active.size)throw Error('Остановите текущую генерацию перед выбором модели');
+  return this.store.mutate(s=>{const cfg=R.pool(s).find(x=>x.id===d.id);if(!cfg)throw Error('Подключение не найдено');const model=String(d.model||cfg.model||'auto');if(model!=='auto'&&!(cfg.catalog||[]).some(m=>m.id===model))throw Error('Обновите каталог и выберите модель из списка');for(const c of s.settings){if(c.generator_version!=='ai-1')continue;c.primary=c.id===cfg.id;if(c.provider===cfg.provider)c.model=model;}return {model,connection:cfg.label};});
+ }
+ async refreshModels(d={}){
+  const s=await this.store.read(),cfg=d.id?R.pool(s).find(c=>c.id===d.id):config(s);if(!cfg)throw Error('Сначала подключите API');const key=await this.credentialKey(cfg),quota=await this.client.keyInfo(cfg.provider,key),models=await this.client.models(cfg.provider,key);
   return this.store.mutate(s=>{const v=s.settings.find(x=>x.id===cfg.id);if(!v)throw Error('Настройки изменились');v.catalog=models;v.catalog_at=Date.now();v.quota=quota;return {count:models.length,quota};});
  }
  enqueue(s,c,channel){
@@ -861,60 +996,60 @@ class AIEngine extends B.SearchEngine{
  async resume(d){
   if(this.active.size)throw Error('Запрос уже выполняется');
   const s=await this.store.read(),old=s.jobs.find(j=>j.id===d.job_id);if(!old||old.engine!=='ai-1')throw Error('Запрос не найден');
-  const cfg=config(s);if(!cfg)throw Error('Подключите API');await this.providerKey(cfg.provider);
-  const result=await this.store.mutate(s=>{const j=s.jobs.find(x=>x.id===d.job_id),c=s.campaigns.find(x=>x.id===j.input.campaign_id);if(!['failed','interrupted','queued','cancelled'].includes(j.status)||c.current_job_id!==j.id)throw Error('Этот запрос уже завершён или заменён');if(j.retry_at>Date.now())throw Error('Повтор доступен после '+new Date(j.retry_at).toLocaleTimeString('ru-RU'));j.input.config=clone(cfg);j.status='queued';j.error=null;j.retry_at=0;return {job_id:j.id};});
+  const cfg=config(s);if(!cfg)throw Error('Подключите API');await this.ensureCredentials(s);
+  const result=await this.store.mutate(s=>{const j=s.jobs.find(x=>x.id===d.job_id),c=s.campaigns.find(x=>x.id===j.input.campaign_id);if(!['failed','interrupted','queued','cancelled'].includes(j.status)||c.current_job_id!==j.id)throw Error('Этот запрос уже завершён или заменён');if(j.retry_at>Date.now())throw Error('Повтор доступен после '+new Date(j.retry_at).toLocaleTimeString('ru-RU'));if(j.checkpoint?.review?.approved===false){j.checkpoint.revised=false;j.revision_rounds=(j.revision_rounds||0)+1;}j.input.config=clone(cfg);j.status='queued';j.error=null;j.error_code=null;j.retry_at=0;return {job_id:j.id};});
   void this.execute(result.job_id).catch(e=>this.onError(e));return result;
  }
  async creditReports(){
   const read=await this.store.read();if(!read.reports.some(r=>r.status==='complete'&&!r.generator_credited&&read.attempts.find(a=>a.id===r.attempt_id)?.provenance?.engine_version==='ai-1'))return;
-  await this.store.mutate(s=>{for(const r of s.reports){if(r.status!=='complete'||r.generator_credited)continue;const a=s.attempts.find(x=>x.id===r.attempt_id),m=a?.provenance?.author;if(!m)continue;const cfg=s.settings.find(x=>x.generator_version==='ai-1'&&x.provider===m.provider);if(!cfg)continue;const stat=cfg.stats[m.requested_model]??={};const field=r.outcome==='accepted'?'task_success':'task_failure';stat[field]=(stat[field]||0)+1;r.generator_credited=true;}return true;});
+  await this.store.mutate(s=>{for(const r of s.reports){if(r.status!=='complete'||r.generator_credited)continue;const a=s.attempts.find(x=>x.id===r.attempt_id),m=a?.provenance?.author;if(!m)continue;const cfg=s.settings.find(x=>m.connection_id?x.id===m.connection_id:x.generator_version==='ai-1'&&x.provider===m.provider);if(!cfg)continue;const stat=cfg.stats[m.requested_model]??={};const field=r.outcome==='accepted'?'task_success':'task_failure';stat[field]=(stat[field]||0)+1;r.generator_credited=true;}return true;});
  }
  async execute(jobId){
   const initial=await this.store.read(),entry=initial.jobs.find(j=>j.id===jobId);if(entry?.engine!=='ai-1')return super.execute(jobId);
   const work=async()=>{
    const job=await this.store.mutate(s=>{const j=s.jobs.find(j=>j.id===jobId);if(j.status!=='queued')return null;j.status='running';j.owner=this.owner;j.updated=stamp();return j;});if(!job)return;
    const controller=new AbortController();this.active.set(jobId,controller);this.onChange();let calls=0;
-   const cfg=job.input.config,cp=job.checkpoint,ctx=job.input.context;let models=[];let key='';
+   let cfg=job.input.config;const cp=job.checkpoint,ctx=job.input.context;
    const live=async fn=>{if(controller.signal.aborted)throw new P.APIError('Операция остановлена',{code:'cancelled'});return this.store.mutate(s=>{const j=s.jobs.find(x=>x.id===jobId);if(j.status!=='running'||s.campaigns.find(c=>c.id===j.input.campaign_id)?.current_job_id!==j.id)throw new P.APIError('Операция остановлена',{code:'cancelled'});return fn(s,j);});};
+   const router=new R.ConnectionRouter(this,job,live,controller.signal);
    const stage=async name=>{await live((s,j)=>{j.stage=name;j.updated=stamp();return true;});this.onChange();};
    const stat=async(id,field,cooldown=0)=>live((s,j)=>{const current=s.settings.find(x=>x.id===cfg.id);if(current){const h=current.stats[id]??={};h[field]=(h[field]||0)+1;if(cooldown)h.cooldown_until=cooldown;}return true;});
    const checkpoint=async()=>live((s,j)=>{j.checkpoint=clone(cp);j.input.context=clone(ctx);return true;});
    const call=async(name,contract,payload,parser,avoid=[])=>{
-    await stage(name);let lastError,correction='',repaired=false;const tried=new Set();
-    for(let n=0;n<4;n++){
-     if(calls>=18)throw new P.APIError('Порция из 18 API-запросов завершена. Разобранные примеры и этапы сохранены; нажмите «Продолжить».',{code:'batch'});
+    await stage(name);let lastError,correction='';const tried=new Map(),repairs=new Set();
+    for(let n=0;n<40;n++){
+     if(calls>=18)throw new P.APIError('Порция из 18 API-запросов завершена. Этапы сохранены; нажмите «Продолжить».',{code:'batch'});
+     const active=await router.select();cfg=active.cfg;const {key,models}=active;
      const messages=[{role:'system',content:K.GENERATE+'\n'+contract},{role:'user',content:JSON.stringify(payload)+(correction?'\nИсправьте ошибку формата предыдущей попытки: '+correction:'')}];
-     const ss=await this.store.read(),stats=ss.settings.find(x=>x.id===cfg.id)?.stats||{};
-     let ranked=P.rankModels(models,stats,new TextEncoder().encode(JSON.stringify(messages)).length,cfg.max_tokens,avoid).filter(m=>!tried.has(m.id));
-     if(cfg.model!=='auto')ranked=ranked.filter(m=>m.id===cfg.model);
-     if(!ranked.length&&lastError?.code==='invalid_output'&&!repaired){repaired=true;ranked=P.rankModels(models,stats,new TextEncoder().encode(JSON.stringify(messages)).length,cfg.max_tokens,avoid).filter(m=>cfg.model==='auto'||cfg.model===m.id);}
-     const model=ranked[0];if(!model)throw lastError||new P.APIError('Нет доступной модели для размера текущего этапа. Выберите другую модель, уменьшите лимит ответа или дождитесь сброса ограничения.',{code:'no_model',retryAt:Math.min(...Object.values(stats).map(x=>x.cooldown_until).filter(x=>x>Date.now()),Infinity)});
-     tried.add(model.id);calls++;await live((s,j)=>{j.requests_total++;j.current_model=model.id;return true;});this.onChange();
+     const ss=await this.store.read(),stats=ss.settings.find(x=>x.id===cfg.id)?.stats||{},used=tried.get(cfg.id)||new Set();tried.set(cfg.id,used);
+     let ranked=P.rankModels(models,stats,new TextEncoder().encode(JSON.stringify(messages)).length,cfg.max_tokens,avoid).filter(m=>!used.has(m.id));
+     const critic=['review','final_review'].includes(name);
+     if(cfg.model!=='auto'&&!critic)ranked=ranked.filter(m=>m.id===cfg.model);
+     if(!ranked.length&&lastError?.code==='invalid_output'&&!repairs.has(cfg.id)){repairs.add(cfg.id);ranked=P.rankModels(models,stats,new TextEncoder().encode(JSON.stringify(messages)).length,cfg.max_tokens,avoid).filter(m=>critic||cfg.model==='auto'||cfg.model===m.id);}
+     const model=ranked[0];if(!model){const retryAt=Math.min(...Object.values(stats).map(x=>x.cooldown_until).filter(x=>x>Date.now()));await router.failed(lastError||new P.APIError('Нет подходящей модели',{code:'no_model',retryAt:Number.isFinite(retryAt)?retryAt:0}));continue;}
+     used.add(model.id);calls++;await live((s,j)=>{j.requests_total++;j.current_model=model.id;return true;});this.onChange();
      try{
       const result=await this.client.complete(cfg.provider,key,model,messages,{signal:controller.signal,max_tokens:cfg.max_tokens,timeout:cfg.timeout*1000});
       let parsed;try{parsed=await parser(result.content);}catch(e){await stat(model.id,'invalid');correction=e.message;throw new P.APIError('Ответ не прошёл проверку: '+e.message,{code:'invalid_output',retryable:true});}
-      await stat(model.id,'valid');await live((s,j)=>{j.stages.push({stage:name,model:result.model,requested_model:result.requested_model,provider:result.provider,usage:result.usage,elapsed_ms:result.elapsed_ms,created:stamp()});return true;});
-      return {value:parsed,model:result};
+      await stat(model.id,'valid');await live((s,j)=>{j.stages.push({stage:name,model:result.model,requested_model:result.requested_model,provider:result.provider,connection_id:cfg.id,connection:cfg.label,usage:result.usage,elapsed_ms:result.elapsed_ms,created:stamp()});return true;});
+      return {value:parsed,model:{...result,connection_id:cfg.id}};
      }catch(error){
-      if(error.isStorageError||controller.signal.aborted)throw error;lastError=error;
-      await live((s,j)=>{j.telemetry.push({stage:name,model:model.id,code:error.code||'failure',status:error.status||0,retry_at:Number.isFinite(error.retryAt)?error.retryAt:0,created:stamp()});return true;});
+      if(error.isStorageError||controller.signal.aborted||error.code==='cancelled')throw error;lastError=error;
+      if(error.global||['auth','account','rate_key','rate_account','network'].includes(error.code)){await router.failed(error);continue;}
+      await live((s,j)=>{j.telemetry.push({stage:name,model:model.id,connection:cfg.label,code:error.code||'failure',status:error.status||0,retry_at:Number.isFinite(error.retryAt)?error.retryAt:0,created:stamp()});return true;});
       if(error.retryAt&&error.retryable)await stat(model.id,'unavailable',error.retryAt);
-      if(!error.retryable||error.global)throw error;
+      if(!error.retryable)throw error;
      }
     }
     throw lastError||Error('Этап не завершён');
    };
    try{
-    key=await this.providerKey(cfg.provider);await stage('catalog');
-    models=await this.client.models(cfg.provider,key,controller.signal);
-    const quota=await this.client.keyInfo(cfg.provider,key,controller.signal);
-    if(quota&&quota.remaining===0)throw new P.APIError('Дневной лимит бесплатных запросов исчерпан. Продолжите после его сброса.',{code:'rate_account',global:true});
-    await live((s,j)=>{const current=s.settings.find(x=>x.id===cfg.id);if(current){current.catalog=models;current.catalog_at=Date.now();current.quota=quota;}return true;});
+    await stage('catalog');await router.select();
     for(const seed of job.input.sources){
      const digest=K.cacheKey(seed);if(cp.cards.some(x=>x.source_id===seed.id&&x.cache_key===digest))continue;
      let cached=seed.ai_analysis?.cache_key===digest?seed.ai_analysis:null;
      if(cached){try{K.parseCard(JSON.stringify(cached.card),seed);}catch{cached=null;}}
-     if(!cached){const result=await call('learning',K.DISTILL,{source_id:seed.id,text:seed.text,notes:seed.notes,category:seed.domains,target_hint:seed.target_hint},raw=>K.parseCard(raw,seed));cached={cache_key:digest,card:result.value,model:result.model.model,provider:cfg.provider,created:stamp()};
+     if(!cached){const result=await call('learning',K.DISTILL,{source_id:seed.id,text:seed.text,notes:seed.notes,category:seed.domains,target_hint:seed.target_hint},raw=>K.parseCard(raw,seed));cached={cache_key:digest,card:result.value,model:result.model.model,provider:result.model.provider,created:stamp()};
       await live((s,j)=>{const current=s.seeds.find(x=>x.id===seed.id);if(current&&K.cacheKey(current)===digest)current.ai_analysis=clone(cached);return true;});}
      cp.cards.push({source_id:seed.id,cache_key:digest,card:cached.card});await checkpoint();
     }
@@ -929,13 +1064,13 @@ class AIEngine extends B.SearchEngine{
      if(Array.isArray(d.blocks)&&!d.blocks.some(x=>typeof x.text==='string'&&x.text.includes(c.objective)))d.blocks.unshift({id:'exact_task_'+uid().slice(0,8),kind:'skeleton',text:'Исходная задача:\n'+c.objective,depends_on:[]});
      const checked=B.validateDesign(d,ctx,s,c);const novelty=K.novelty(checked,s,c);return {design:checked,novelty};
     };
-    if(!cp.design){const result=await call('composition',B.DESIGN_CONTRACT,{context:ctx,plan:cp.plan},validate);cp.design=result.value.design;cp.novelty=result.value.novelty;cp.author={provider:cfg.provider,model:result.model.model,requested_model:result.model.requested_model};await checkpoint();}
-    if(!cp.review){const result=await call('review',B.CRITIC_CONTRACT+'\n'+K.CRITIQUE,{context:ctx,plan:cp.plan,design:cp.design,novelty:cp.novelty},B.parseReview,[cp.author.requested_model]);cp.review=result.value;cp.critic={provider:cfg.provider,model:result.model.model};await checkpoint();}
+    if(!cp.design){const result=await call('composition',B.DESIGN_CONTRACT,{context:ctx,plan:cp.plan},validate);cp.design=result.value.design;cp.novelty=result.value.novelty;cp.author={provider:result.model.provider,model:result.model.model,requested_model:result.model.requested_model,connection_id:result.model.connection_id};await checkpoint();}
+    if(!cp.review){const result=await call('review',B.CRITIC_CONTRACT+'\n'+K.CRITIQUE,{context:ctx,plan:cp.plan,design:cp.design,novelty:cp.novelty},B.parseReview,[cp.author.requested_model]);cp.review=result.value;cp.critic={provider:result.model.provider,model:result.model.model};await checkpoint();}
     if(!cp.review.approved){
-     if(cp.revised)throw Error('Повторная проверка отклонила промпт: '+cp.review.issues.map(x=>x.detail).join('; '));
-     const result=await call('revision',B.DESIGN_CONTRACT,{context:ctx,plan:cp.plan,rejected_design:cp.design,review:cp.review},validate);cp.design=result.value.design;cp.novelty=result.value.novelty;cp.author={provider:cfg.provider,model:result.model.model,requested_model:result.model.requested_model};cp.revised=true;cp.review=null;await checkpoint();
-     const review=await call('final_review',B.CRITIC_CONTRACT+'\n'+K.CRITIQUE,{context:ctx,plan:cp.plan,design:cp.design,novelty:cp.novelty},B.parseReview,[cp.author.requested_model]);cp.review=review.value;cp.critic={provider:cfg.provider,model:review.model.model};await checkpoint();
-     if(!cp.review.approved)throw Error('Повторная проверка отклонила промпт: '+cp.review.issues.map(x=>x.detail).join('; '));
+     if(cp.revised)throw new P.APIError('Проверка нашла замечания. Черновик сохранён; можно запустить новую доработку.',{code:'review_rejected'});
+     const result=await call('revision',B.DESIGN_CONTRACT,{context:ctx,plan:cp.plan,rejected_design:cp.design,review:cp.review},validate);cp.design=result.value.design;cp.novelty=result.value.novelty;cp.author={provider:result.model.provider,model:result.model.model,requested_model:result.model.requested_model,connection_id:result.model.connection_id};cp.revised=true;cp.review=null;await checkpoint();
+     const review=await call('final_review',B.CRITIC_CONTRACT+'\n'+K.CRITIQUE,{context:ctx,plan:cp.plan,design:cp.design,novelty:cp.novelty},B.parseReview,[cp.author.requested_model]);cp.review=review.value;cp.critic={provider:review.model.provider,model:review.model.model};await checkpoint();
+     if(!cp.review.approved)throw new P.APIError('Проверка нашла замечания. Черновик сохранён; можно запустить новую доработку.',{code:'review_rejected'});
     }
     await live((s,j)=>{const c=s.campaigns.find(x=>x.id===j.input.campaign_id);K.novelty(cp.design,s,c);return this.finishDesign(s,j,cp.design,{channel:'api',engine_version:'ai-1',plan:cp.plan,review:cp.review,review_type:'separate_model_call',author:cp.author,critic:cp.critic,novelty:cp.novelty,learned_sources:cp.cards.map(x=>({id:x.source_id,cache_key:x.cache_key})),stages:j.stages});});
    }catch(error){
@@ -947,21 +1082,22 @@ class AIEngine extends B.SearchEngine{
  }
  async restore(payload,confirmed){
   const safe=clone(payload);
-  for(const row of safe?.objects||[]){if(row.kind==='seeds')delete row.ai_analysis;if(row.kind==='settings'&&row.generator_version==='ai-1'){P.endpoint(row.provider);row.base_url=P.endpoint(row.provider);row.catalog=[];row.catalog_at=0;row.stats={};}}
+  for(const row of safe?.objects||[]){if(row.kind==='seeds')delete row.ai_analysis;if(row.kind==='settings'&&row.generator_version==='ai-1'){P.endpoint(row.provider);row.base_url=P.endpoint(row.provider);row.catalog=[];row.catalog_at=0;row.stats={};row.cooldown_until=0;row.key_status='ready';}}
   // Imported checkpoints are not trusted as passed model reviews; retain history,
   // rebuild unfinished inference jobs from source data when explicitly resumed.
   for(const j of safe?.jobs||[])if(j.engine==='ai-1'&&j.status!=='completed'){j.checkpoint={cards:[],plan:null,design:null,review:null};j.input.context.reference_library.examples=[];j.status='interrupted';j.error='Восстановлено из копии. Этапы будут проверены заново.';}
   return super.restore(safe,confirmed);
  }
 }
-const api={...B,Engine:AIEngine,AIEngine,aiConfig:config,aiProviders:P.PROVIDERS,rankAIModels:P.rankModels};root.PromptLab=api;if(typeof module!=='undefined'&&module.exports)module.exports=api;
+const api={...B,Engine:AIEngine,AIEngine,aiConfig:config,aiProviders:P.PROVIDERS,rankAIModels:P.rankModels,aiConnections:R.pool};root.PromptLab=api;if(typeof module!=='undefined'&&module.exports)module.exports=api;
 })(globalThis);
 
 </script><script>
 "use strict";
 const $=s=>document.querySelector(s);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let engine,state,page='generator',selectedCampaign='',dirty=false,temporary=false,toastTimer,storageFault=null,pollStarted=false,recoverySnapshot=null,startExpanded=false,returnToTask=false;
+let engine,state,page='generator',selectedCampaign='',dirty=false,temporary=false,toastTimer,storageFault=null,pollStarted=false,recoverySnapshot=null,startExpanded=false,returnToTask=false,pollBusy=false;
+const notified=new Set();let noticesReady=false;
 const titles={generator:'Генератор',seeds:'База примеров',history:'История',settings:'Настройки',data:'Данные'};
 const stageNames={catalog:'Обновляю каталог моделей',learning:'Извлекаю принципы из примеров',analysis:'Разбираю задачу, отчёт и сравниваю подходы',composition:'Создаю структуру и текст',repair:'Исправляю структуру',review:'Проверяю задачу и новизну',revision:'Дорабатываю по замечаниям',final_review:'Повторно проверяю',complete:'Готово'};
 const outcomes={setup_refusal:'Отказ на промпт',task_refusal:'Отказ на задание',followup_refusal:'Отказ на продолжение',accepted:'Задания выполнены — по отчёту'};
@@ -972,14 +1108,14 @@ function renderStorageNotice(){const banner=$('#storage-banner');if(!banner)retu
 function showStartupError(error){storageFault=error;const issue=PromptLab.storageIssue(error),hasSnapshot=Boolean(engine?.store?.lastSnapshot||recoverySnapshot);$('#connection').textContent='Сохранение недоступно';$('#app').innerHTML=`<section class="panel"><h2>${esc(issue.title)}</h2><p>${esc(issue.message)}</p><p>Не очищайте данные сайта до резервной копии: в них хранятся ваши скелеты и отчёты.</p><div class="actions"><button class="primary" id="retry-storage">Повторить подключение</button><button id="use-memory">${hasSnapshot?'Открыть прочитанные данные временно':'Открыть временно без сохранения'}</button>${hasSnapshot?'<button data-cache-backup>Скачать прочитанную копию</button>':''}</div><p class="help">${hasSnapshot?'Прочитанные записи можно открыть без записи на диск.':'Старые записи сейчас не удалось прочитать. Временный режим откроет отдельную пустую сессию; старую базу он не удаляет.'} Перед закрытием временной сессии скачайте её копию.</p><details><summary>Техническая причина</summary><pre>${esc(issue.detail)}</pre></details></section>`;renderStorageNotice();}
 function storageKey(){return 'promptlab-simple-ui:'+location.pathname.replace(/index\.html$/,'');}
 function remember(){try{sessionStorage.setItem(storageKey(),JSON.stringify({selectedCampaign,drafts,returnToTask,startExpanded}));}catch{}}
-function capture(form){if(!form?.id||form.id==='api-form'||form.id==='restore-form')return;drafts[form.id]=Object.fromEntries(new FormData(form));remember();}
+function capture(form){if(!form?.id||['api-form','vault-form','restore-form'].includes(form.id))return;drafts[form.id]=Object.fromEntries(new FormData(form));remember();}
 function restoreDrafts(){for(const [formId,values] of Object.entries(drafts)){const form=$('#'+formId);if(!form?.elements)continue;for(const [name,value] of Object.entries(values)){const field=form.elements.namedItem(name);if(field&&field.type!=='file'&&field.type!=='password')field.value=value;}}toggleSetup();}
 function current(){return state.campaigns.find(c=>c.id===selectedCampaign)||state.campaigns[0];}
 function attempt(c=current()){return c&&state.attempts.find(a=>a.id===c.current_attempt_id);}
 function report(a=attempt()){return a&&state.reports.find(r=>r.attempt_id===a.id);}
 function job(c=current()){return c&&state.jobs.find(j=>j.id===c.current_job_id);}
 async function api(path,data){try{const result=await engine.request(path,data);if(data!==undefined&&!temporary&&storageFault){storageFault=null;renderStorageNotice();}return result;}catch(error){if(error?.isStorageError){storageFault=error;renderStorageNotice();}throw error;}}
-async function load(redraw=true){state=await api('/api/state');$('#connection').textContent=temporary?'Без сохранения':storageFault?'Сохранение недоступно':'На этом устройстве';$('#seed-count').textContent=state.seeds.length;if(redraw){dirty=false;render();}}
+async function load(redraw=true){state=await api('/api/state');$('#connection').textContent=temporary?'Без сохранения':storageFault?'Сохранение недоступно':'На этом устройстве';$('#seed-count').textContent=state.seeds.length;renderNotices();if(redraw){dirty=false;render();}}
 function closeMenu(){document.body.classList.remove('nav-open');$('#nav-backdrop').hidden=true;$('#menu-toggle').setAttribute('aria-expanded','false');}
 function go(next){page=next;dirty=false;closeMenu();render();window.scrollTo(0,0);}
 function render(){if(!state)return;$('#page-title').textContent=titles[page];document.querySelectorAll('[data-nav]').forEach(b=>b.classList.toggle('active',b.dataset.nav===page));$('#app').innerHTML=views[page]();restoreDrafts();renderStorageNotice();}
@@ -992,11 +1128,14 @@ async function initialize(memory=false){
  engine=new PromptLab.Engine(memory?new PromptLab.MemoryStore(snapshot||undefined):new PromptLab.IndexedStore('promptlab-browser-v1:'+location.pathname.replace(/index\.html$/,'')),{onError:handleError,onChange:()=>{if(state&&!dirty&&!document.activeElement?.matches('input,textarea,select'))load().catch(handleError);}});
  if(old?.keys)engine.keys=new Map(old.keys);
  if(old?.providerKeys)engine.providerKeys=new Map(old.providerKeys);
+ if(memory&&old?.vault)engine.vault.memory=new Map(old.vault.memory);
  try{await engine.init();}catch(error){recoverySnapshot=engine.store.lastSnapshot||recoverySnapshot;throw error;}temporary=memory;storageFault=null;
  if(!existingDrafts)try{const saved=JSON.parse(sessionStorage.getItem(storageKey())||'null');if(saved){selectedCampaign=saved.selectedCampaign||'';returnToTask=false;startExpanded=Boolean(saved.startExpanded);Object.assign(drafts,saved.drafts||{});}}catch{}
  await load();startPolling();
 }
-function startPolling(){if(pollStarted)return;pollStarted=true;setInterval(async()=>{if(!state||dirty||storageFault||document.hidden||!state.jobs.some(j=>['queued','running'].includes(j.status))||document.activeElement?.matches('input,textarea,select'))return;try{await load();}catch(error){handleError(error);}},2000);}
+function renderNotices(){const events=state.jobs.flatMap(j=>j.notifications||[]).sort((a,b)=>a.created.localeCompare(b.created)),latest=events.at(-1),banner=$('#routing-banner');if(banner){banner.hidden=!latest;banner.textContent=latest?.message||'';}if(noticesReady){const fresh=events.filter(x=>!notified.has(x.id));if(fresh.length)toast(fresh.at(-1).message);}for(const n of events)notified.add(n.id);noticesReady=true;}
+function startPolling(){if(pollStarted)return;pollStarted=true;setInterval(async()=>{if(pollBusy||!state||storageFault||document.hidden)return;const relevant=state.jobs.some(j=>['queued','running'].includes(j.status)||j.status==='failed'&&j.error_code==='pool_exhausted'&&j.retry_at>0);if(!relevant)return;pollBusy=true;try{await api('/api/ai/auto',{});await load(!dirty&&!document.activeElement?.matches('input,textarea,select'));}catch(error){handleError(error);}finally{pollBusy=false;}},2000);}
+
 function input(title,name,value='',attrs=''){return `<label>${esc(title)}<input name="${name}" value="${esc(value)}" ${attrs}></label>`;}
 function area(title,name,value='',attrs=''){return `<label>${esc(title)}<textarea name="${name}" ${attrs}>${esc(value)}</textarea></label>`;}
 function select(title,name,options){return `<label>${esc(title)}<select name="${name}">${options}</select></label>`;}
@@ -1011,11 +1150,11 @@ function startForm(){const c=current();return `<form id="start-form">
  <p class="help">В режиме API модель анализирует примеры, проектирует новый промпт и отдельно проверяет результат.</p>${!PromptLab.aiConfig(state)?'<button type="button" data-nav="settings">Подключить API</button>':''}
  <div class="actions"><button class="primary" type="submit">Собрать промпт</button></div></form>`;}
 
-function generator(){const c=current();return `${!c?`<section class="hero"><div class="eyebrow">НОВЫЕ СТРУКТУРЫ · ПАМЯТЬ ИСПЫТАНИЙ</div><h2>Задача. База. Испытания.</h2><p>Подключите модель генератора, добавьте примеры и задачу. Генератор анализирует принципы и создаёт отдельную новую структуру.</p></section><section class="panel">${startForm()}</section>`:`<section class="panel"><div class="row spread"><div><h2>${esc(c.target_snapshot.title)}</h2><p class="help">${esc(c.domain)}${c.persona?' · Персона '+esc(c.persona):''}</p></div><span class="badge good">${c.channel==='api'?'ИИ через API':'Локальный поиск'}</span></div>${c.objective?`<div class="objective-summary"><strong>Задача</strong><p>${esc(c.objective)}</p></div>`:'<p class="notice">В старом проекте нет текста задачи. Начните новую задачу; история сохранена.</p>'}<details ${startExpanded||!c.objective?'open':''}><summary>Новая задача</summary>${startForm()}</details></section>${activePanel(c)}`}<details class="panel"><summary>Как строится следующий промпт</summary><ol><li>Анализатор изучает оригиналы и сохраняет абстрактные принципы и зависимости.</li><li>Планировщик получает принципы, точную задачу и полные отчёты, сравнивает разные подходы.</li><li>Автор пишет новую структуру и оформление, не получая оригинальных примеров.</li><li>Программа ищет текстовые заимствования. Отдельный вызов модели проверяет задачу и структурную новизну.</li><li>Только реальная проверка в целевой модели определяет результат. Accept на установку не заменяет выполнение задания.</li></ol><p class="help">Режим API использует инструкции и память примеров, не изменяя веса модели. Локальный режим сохраняет прежний составной поиск.</p></details>`;}
+function generator(){const c=current();return `${!state.keyring?.available.length?vaultPanel():''}${!c?`<section class="hero"><div class="eyebrow">НОВЫЕ СТРУКТУРЫ · ПАМЯТЬ ИСПЫТАНИЙ</div><h2>Задача. База. Испытания.</h2><p>Подключите модель генератора, добавьте примеры и задачу. Генератор анализирует принципы и создаёт отдельную новую структуру.</p></section><section class="panel">${startForm()}</section>`:`<section class="panel"><div class="row spread"><div><h2>${esc(c.target_snapshot.title)}</h2><p class="help">${esc(c.domain)}${c.persona?' · Персона '+esc(c.persona):''}</p></div><span class="badge good">${c.channel==='api'?'ИИ через API':'Локальный поиск'}</span></div>${c.objective?`<div class="objective-summary"><strong>Задача</strong><p>${esc(c.objective)}</p></div>`:'<p class="notice">В старом проекте нет текста задачи. Начните новую задачу; история сохранена.</p>'}<details ${startExpanded||!c.objective?'open':''}><summary>Новая задача</summary>${startForm()}</details></section>${activePanel(c)}`}${modelsPanel(true)}<details class="panel"><summary>Как строится следующий промпт</summary><ol><li>Анализатор изучает оригиналы и сохраняет абстрактные принципы и зависимости.</li><li>Планировщик получает принципы, точную задачу и полные отчёты, сравнивает разные подходы.</li><li>Автор пишет новую структуру и оформление, не получая оригинальных примеров.</li><li>Программа ищет текстовые заимствования. Отдельный вызов модели проверяет задачу и структурную новизну.</li><li>Только реальная проверка в целевой модели определяет результат. Accept на установку не заменяет выполнение задания.</li></ol><p class="help">Режим API использует инструкции и память примеров, не изменяя веса модели. Локальный режим сохраняет прежний составной поиск.</p></details>`;}
 
 function activePanel(c){const j=job(c),a=attempt(c);if(j?.engine==='ai-1'&&j.status!=='completed')return aiJobPanel(j);if(j?.status==='search_paused')return searchPause(j,c);if(j&&j.channel!=='local'&&['waiting_for_result','queued','running','failed','interrupted','cancelled'].includes(j.status))return `<section class="panel"><h2>Продолжить работу</h2><p>В этом проекте остался запрос предыдущей версии. Задача и история сохранены.</p>${c.objective?`<button class="primary" data-next="${c.id}">Собрать заново</button>`:''}</section>`;if(j&&['waiting_for_result','queued','running','failed','interrupted','cancelled'].includes(j.status))return jobPanel(j,c);return a?attemptPanel(a,c):empty('Начните генерацию.');}
 
-function aiJobPanel(j){const running=['queued','running'].includes(j.status),cp=j.checkpoint||{};return `<section class="panel"><div class="eyebrow">ГЕНЕРАЦИЯ ЧЕРЕЗ API</div><h2>${esc(running?stageNames[j.stage]||j.stage:'Генерация приостановлена')}</h2>${j.current_model?`<p>Модель: <strong>${esc(j.current_model)}</strong></p>`:''}<div class="pipeline"><span class="badge">Примеры: ${cp.cards?.length||0}/${j.input.sources?.length||0}</span><span class="badge ${cp.plan?'good':''}">План ${cp.plan?'✓':''}</span><span class="badge ${cp.design?'good':''}">Промпт ${cp.design?'✓':''}</span><span class="badge ${cp.review?.approved?'good':''}">Проверка ${cp.review?.approved?'✓':''}</span></div><p class="help">API-запросов: ${j.requests_total||0}. Завершённые этапы сохраняются. Оставьте вкладку открытой.</p>${j.error?`<p class="notice">${esc(j.error)}</p>`:''}${j.retry_at?`<p class="help">Повтор после ${esc(new Date(j.retry_at).toLocaleString('ru-RU'))}</p>`:''}<div class="actions">${running?`<button data-${j.status==='queued'?'cancel':'stop'}-job="${j.id}">Остановить</button>`:`<button class="primary" data-resume-ai="${j.id}">Продолжить с сохранённого этапа</button><button data-nav="settings">Подключение и модели</button>`}</div>${j.telemetry?.length?`<details><summary>Переключения и ошибки · ${j.telemetry.length}</summary>${j.telemetry.slice(-12).map(x=>`<p class="help">${esc(stageNames[x.stage]||x.stage)} · ${esc(x.model)} · ${esc(x.code)}${x.status?' · HTTP '+x.status:''}</p>`).join('')}</details>`:''}</section>`;}
+function aiJobPanel(j){const running=['queued','running'].includes(j.status),cp=j.checkpoint||{},rejected=cp.review?.approved===false;return `<section class="panel"><div class="eyebrow">ГЕНЕРАЦИЯ ЧЕРЕЗ API</div><h2>${esc(running?stageNames[j.stage]||j.stage:rejected?'Черновик требует доработки':'Генерация приостановлена')}</h2>${j.current_model?`<p>Модель: <strong>${esc(j.current_model)}</strong></p>`:''}${j.current_connection?`<p class="help">Подключение: ${esc(j.current_connection)}</p>`:''}<div class="pipeline"><span class="badge">Примеры: ${cp.cards?.length||0}/${j.input.sources?.length||0}</span><span class="badge ${cp.plan?'good':''}">План ${cp.plan?'✓':''}</span><span class="badge ${cp.design?'good':''}">Черновик ${cp.design?'✓':''}</span><span class="badge ${cp.review?.approved?'good':rejected?'warn':''}">Проверка ${cp.review?.approved?'✓':rejected?'— есть замечания':''}</span></div><p class="help">API-запросов: ${j.requests_total||0}. Завершённые этапы сохраняются. Оставьте вкладку открытой.</p>${!running&&cp.design?`<details class="draft-panel" open><summary>Черновик промпта — проверка не пройдена</summary><pre class="prompt-output">${esc(cp.design.prompt||cp.design.blocks.map(b=>b.text).join('\n\n'))}</pre><button class="small" data-copy-draft="${j.id}">Копировать черновик</button><p class="help">Это текст промпта, а не замечания проверяющей модели. Он ещё не прошёл все проверки и не испытан на цели.</p></details>`:''}${!running&&rejected?`<details class="review-panel"><summary>Замечания проверяющей модели · ${cp.review.issues.length}</summary><p>${esc(cp.review.summary)}</p><ol>${cp.review.issues.map(x=>`<li>${esc(x.detail)}</li>`).join('')}</ol></details>`:''}${j.error?`<p class="notice">${esc(j.error_code==='review_rejected'||rejected?'Проверяющая модель отклонила черновик. «Доработать по замечаниям» запустит новый запрос с её замечаниями.':j.error)}</p>`:''}${j.status==='failed'&&j.retry_at?`<p class="help">Автоматический повтор после ${esc(new Date(j.retry_at).toLocaleString('ru-RU'))}, пока вкладка открыта.</p>`:''}<div class="actions">${running?`<button data-${j.status==='queued'?'cancel':'stop'}-job="${j.id}">Остановить</button>`:`<button class="primary" data-resume-ai="${j.id}" ${j.retry_at>Date.now()?'disabled':''}>${rejected?'Доработать по замечаниям':'Продолжить с сохранённого этапа'}</button><button data-nav="settings">Подключение и модели</button>${j.status==='failed'&&j.retry_at?`<button data-cancel-job="${j.id}">Остановить автоповтор</button>`:''}`}</div>${j.notifications?.length?`<details><summary>Переключения подключений · ${j.notifications.length}</summary>${j.notifications.map(x=>`<p class="help">${esc(x.message)}</p>`).join('')}</details>`:''}${j.telemetry?.length?`<details><summary>Диагностика · ${j.telemetry.length}</summary>${j.telemetry.slice(-12).map(x=>`<p class="help">${esc(stageNames[x.stage]||x.stage)} · ${esc(x.connection||'')} · ${esc(x.model||'')} · ${esc(x.code)}${x.status?' · HTTP '+x.status:''}</p>`).join('')}</details>`:''}</section>`;}
 
 function searchPause(j,c){return `<section class="panel"><h2>Нужна следующая порция поиска</h2><p>${esc(j.error)}</p><p class="help">В последней порции рассмотрено сочетаний: ${j.search?.proposed||0}. Позиция поиска сохранена. Это не результат испытания модели.</p><div class="actions"><button class="primary" data-next="${c.id}">Продолжить поиск</button><button data-nav="seeds">Расширить базу</button></div><details><summary>Причины отсева</summary>${(j.search?.rejected||[]).slice(0,8).map(x=>`<p>${esc(x.reason)}</p>`).join('')||'<p class="help">Ранее испытанные или слишком близкие структуры.</p>'}</details></section>`;}
 
@@ -1035,7 +1174,11 @@ function seeds(){return `<section class="hero"><h2>База исходных п�
 function history(){return `<section class="panel"><h2>Проекты и отчёты</h2>${state.campaigns.length?state.campaigns.map(c=>`<div class="entry"><div class="row spread"><h3>${esc(c.target_snapshot.title)} · ${esc(c.domain)}</h3><button data-open-campaign="${c.id}">Открыть текущую работу</button></div><p class="help">${c.persona?'Персона '+esc(c.persona)+' · ':''}${esc(c.created)}</p><p>${esc(c.objective||'Задача не была указана в старой версии')}</p>${state.attempts.filter(a=>a.campaign_id===c.id).map(a=>{const r=report(a);return `<details><summary>Промпт ${a.number} · ${r?.status==='complete'?esc(outcomes[r.outcome]):'Отчёт не завершён'}</summary><pre>${esc(a.prompt)}</pre><p>${esc(a.strategy.why_changed)}</p>${r?`<p>Установка: ${esc(r.setup.decision)}</p><pre>${esc(r.setup.response)}</pre>${turnsList(r)}`:''}</details>`;}).join('')}</div>`).join(''):empty('После первой генерации здесь появится история.')}<p class="help">Неудачные версии остаются в истории и передаются как отрицательный опыт.</p></section>${legacyPanel()}`;}
 function legacyPanel(){if(!state.candidates.length&&!state.runs.length)return '';return `<section class="panel"><h2>Архив предыдущей версии</h2><p class="help">Ранние скелеты и диалоги сохранены. Наблюдения по той же модели и категории доступны новому генератору.</p>${state.runs.map(r=>`<details><summary>${esc(r.target_snapshot.title)} · ${esc(r.task_snapshot.domain)} · ${esc(r.created)}</summary><p>${esc(r.task_snapshot.objective)}</p>${r.messages.map(m=>`<p class="help">${esc(m.role)} · ${esc(m.purpose)}</p><pre>${esc(m.content)}</pre>`).join('')}</details>`).join('')}<details><summary>Ранние промпты · ${state.candidates.length}</summary>${state.candidates.map(c=>`<h3>${esc(c.title)}</h3><pre>${esc(c.compiled)}</pre>`).join('')}</details></section>`;}
 function aiAttemptPanel(a){const p=a.provenance;if(p.engine_version!=='ai-1')return '';return `<details><summary>Как создан и проверен промпт</summary><p>Автор: ${esc(p.author.model)} · ${esc(p.author.provider)}</p><p>Проверка: ${esc(p.critic.model)}</p><p>Разобрано исходников: ${p.learned_sources.length}. В контекст вошло: ${p.context.reference_library.included}.</p><p class="help">Оригиналы примеров не передавались автору. Проверено источников и прежних версий: ${p.novelty.checked_sources}. Максимальное текстовое сходство: ${(100*p.novelty.max_jaccard).toFixed(1)}% по 5-словным сочетаниям.</p><p class="help">Текстовая проверка и оценка модели не доказывают полную смысловую уникальность. Статус результата — ещё не испытан на целевой модели.</p><ul>${p.stages.map(x=>`<li>${esc(stageNames[x.stage]||x.stage)} · ${esc(x.model)}${x.usage?.total_tokens?' · '+x.usage.total_tokens+' токенов':''}</li>`).join('')}</ul></details>`;}
-function settings(){const cfg=PromptLab.aiConfig(state),ranked=cfg?PromptLab.rankAIModels(cfg.catalog||[],cfg.stats||{},0,cfg.max_tokens):[];return `<section class="hero"><h2>Подключение генератора</h2><p>OpenRouter получает актуальный каталог и выбирает среди моделей с нулевой ценой. Groq и Gemini можно подключить отдельно.</p></section><div class="grid"><section class="panel"><form id="api-form" autocomplete="off">${select('Провайдер','provider',Object.entries(PromptLab.aiProviders).map(([id,x])=>`<option value="${id}" ${cfg?.provider===id?'selected':''}>${esc(x.label)}</option>`).join(''))}${input('Полный API-ключ','api_key','','type="password" autocomplete="new-password" placeholder="Вставьте полный ключ; пустое поле сохраняет прежний"')}${input('Модель генератора','model',cfg?.model||'auto','list="api-models" required')}<datalist id="api-models"><option value="auto">Автовыбор</option>${(cfg?.catalog||[]).map(m=>`<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('')}</datalist><p class="help">auto — выбор по поддержке рассуждения, формата, размеру контекста и истории результатов. Это рабочий рейтинг, а не доказательство, что модель сильнейшая во всех задачах. При точном ID автоматическая смена модели выключена.</p>${input('Лимит ответа, токенов','max_tokens',cfg?.max_tokens||8192,'type="number" min="2048" max="16384" step="1024"')}<label class="check-label"><input type="checkbox" name="remember_key" ${cfg?.remember_key?'checked':''}>Запомнить ключ на этом устройстве</label><p class="help">Без этой отметки ключ хранится только в памяти вкладки. В HTML и резервную копию ключ не включается. Задача, примеры и отчёты отправляются выбранному провайдеру при генерации.</p><button class="primary">Подключить и проверить</button></form>${cfg?`<div class="divider"></div><p>Подключён: ${esc(PromptLab.aiProviders[cfg.provider].label)}</p><p class="help">Каталог: ${esc(new Date(cfg.catalog_at).toLocaleString('ru-RU'))} · ${cfg.catalog.length} моделей</p>${cfg.quota?`<p>Дневная квота OpenRouter: ${cfg.quota.remaining} из ${cfg.quota.limit} запросов осталось.</p>`:''}<div class="actions"><button data-refresh-models>Обновить каталог и квоту</button><button data-forget-key="${cfg.provider}">Удалить ключ</button></div>`:''}<p class="help">OpenRouter: только нулевые цены, без платного переключения. Для Groq и Gemini применяются тариф и квота вашего аккаунта; список моделей не сообщает доступный бесплатный остаток.</p></section><section class="panel"><h2>Автовыбор и доступность</h2>${ranked.length?ranked.slice(0,12).map((m,i)=>`<div class="entry"><strong>${i+1}. ${esc(m.id)}</strong><p class="help">${esc(m.reasons.join(' · ')||'Контекст и доступность')} · контекст ${m.context_length.toLocaleString('ru-RU')} токенов</p></div>`).join(''):empty('После подключения здесь появятся модели из каталога API.')}<p class="help">При перегрузке отдельной модели выбирается следующая. При лимите аккаунта генерация приостанавливается, завершённые этапы сохраняются. Смена ключа того же аккаунта не добавляет квоту.</p></section></div><section class="panel"><h2>Целевые модели для ручного испытания</h2><form id="target-form">${input('Название модели','model','','required maxlength="200" placeholder="Своя модель"')}${input('Версия или условия проверки','version','профиль')}${area('Наблюдения — необязательно','notes')}<button>Добавить модель</button></form>${state.targets.map(t=>`<div class="entry"><strong>${esc(t.title)}</strong><p class="help">${esc(t.version)}</p></div>`).join('')}</section>`;}
+function vaultPanel(){if(!state.keyring?.embedded)return '';const ready=state.keyring.available.length>0;return `<${ready?'details':'section'} class="panel vault-panel">${ready?'<summary>Встроенный набор ключей</summary>':'<h2>Разблокировать встроенные подключения</h2>'}<p>${state.keyring.embedded_count} ключей уже находятся в этом HTML в зашифрованном виде. Введите код из сообщения со сборкой один раз.</p><form id="vault-form" autocomplete="off">${input('Код разблокировки','passphrase','','type="password" required autocomplete="off" autocapitalize="none" spellcheck="false"')}<label class="check-label"><input name="remember_key" type="checkbox" checked>Запомнить доступ на этом устройстве</label><button class="primary">Разблокировать набор</button></form><p class="help">При сохранённом доступе повторный ввод не нужен. Во временном режиме код потребуется после закрытия вкладки. Код не публикуйте вместе с HTML.</p></${ready?'details':'section'}>`;}
+function modelsPanel(compact=false){const cfg=PromptLab.aiConfig(state);if(!cfg)return '';const ranked=PromptLab.rankAIModels(cfg.catalog||[],cfg.stats||{},0,cfg.max_tokens),best=ranked[0]?.id,rows=[...ranked,...(cfg.catalog||[]).filter(m=>!ranked.some(r=>r.id===m.id))],busy=state.jobs.some(j=>['running','queued'].includes(j.status));const content=`<p class="help">Основная модель: <strong>${esc(cfg.model==='auto'?(best?'Авто · '+best:'Автовыбор'):cfg.model)}</strong> · ${esc(cfg.label||cfg.provider)}</p><label>Подключение для выбора модели<select id="model-connection" ${busy?'disabled':''}>${PromptLab.aiConnections(state).map(c=>`<option value="${c.id}" ${c.id===cfg.id?'selected':''}>${esc(c.label||c.provider)}</option>`).join('')}</select></label><div class="actions"><button type="button" data-pick-model="auto" data-connection-id="${cfg.id}" aria-pressed="${cfg.model==='auto'}" ${busy?'disabled':''}>Автовыбор ${cfg.model==='auto'?'✓':''}</button><button type="button" data-refresh-models="${cfg.id}">Обновить каталог</button></div><p class="help">Нажмите на карточку. Эта модель будет анализировать и писать промпт; проверка по возможности выполняется другой моделью. При недоступности основного подключения включится резервное с уведомлением.</p><div class="model-grid" role="group" aria-label="Модели генератора">${rows.map(m=>{const cooling=(cfg.stats?.[m.id]?.cooldown_until||0)>Date.now(),compatible=ranked.some(r=>r.id===m.id);return `<button type="button" class="model-card ${cfg.model===m.id?'selected':''}" data-pick-model="${esc(m.id)}" data-connection-id="${cfg.id}" aria-pressed="${cfg.model===m.id}" ${busy||!compatible?'disabled':''}>${m.id===best?'<span class="best-badge">the best</span>':''}<strong>${esc(m.name||m.id)}</strong><span class="model-id">${esc(m.id)}</span><span class="model-reasons">${esc(m.reasons?.join(' · ')||'Контекст и доступность')} · ${Number(m.context_length).toLocaleString('ru-RU')} токенов</span><span>${cfg.model===m.id?'Выбрана':cooling?'Временно недоступна':!compatible?'Не подходит по объёму':'Выбрать'}</span></button>`;}).join('')}</div>${!rows.length?empty('Нажмите «Обновить каталог», чтобы выбрать модель.'):''}<p class="help">the best — рекомендация среди доступных моделей этого подключения по возможностям и накопленной истории. Это не универсальный рейтинг качества.</p>${cfg.quota?`<p class="help">Остаток дневной квоты OpenRouter: ${esc(cfg.quota.remaining)} из ${esc(cfg.quota.limit)}. Данные на момент последней проверки.</p>`:''}`;return compact?`<details class="panel model-picker"><summary>Выбрать модель генератора · ${esc(cfg.model)}</summary>${content}</details>`:`<section class="panel model-picker"><h2>Модель генератора</h2>${content}</section>`;}
+function connectionsPanel(){const rows=state.settings.filter(c=>c.generator_version==='ai-1');if(!rows.length)return '';return `<section class="panel"><h2>Основное и резервные подключения</h2>${rows.map(c=>{const status=c.enabled===false?'Отключено':c.key_status==='unavailable'?'Нужна проверка ключа':!state.keyring.available.includes(c.id)?'Нужно разблокировать':c.cooldown_until>Date.now()?'Ожидание до '+new Date(c.cooldown_until).toLocaleTimeString('ru-RU'):'Доступ сохранён';return `<div class="entry"><div class="row spread"><strong>${esc(c.label||c.provider)}</strong><span class="badge">${esc(status)}</span></div><p class="help">${esc(c.model)}${c.primary?' · основное':''}</p><div class="actions"><button class="small" data-toggle-connection="${c.id}">${c.enabled===false?'Включить':'Отключить'}</button>${c.key_status==='unavailable'&&c.enabled!==false?`<button class="small" data-retry-connection="${c.id}">Проверить заново</button>`:''}<button class="small" data-forget-connection="${c.id}">Удалить ключ с устройства</button></div></div>`;}).join('')}<p class="help">При общем лимите сервис пропускается целиком. Если все подключения ждут сброса, приложение сохраняет этапы и повторяет запрос после паузы. Уведомления появляются здесь, пока сайт открыт.</p></section>`;}
+function settings(){return `<section class="hero"><h2>Подключение генератора</h2><p>Разблокируйте встроенный набор, выберите модель и начните задачу. Переключением резервных подключений управляет приложение.</p></section>${vaultPanel()}${modelsPanel()}${connectionsPanel()}<details class="panel"><summary>Добавить другой API-ключ</summary><form id="api-form" autocomplete="off">${select('Провайдер','provider',Object.entries(PromptLab.aiProviders).map(([id,x])=>`<option value="${id}">${esc(x.label)}</option>`).join(''))}${input('Полный API-ключ','api_key','','type="password" required autocomplete="new-password"')}${input('Модель генератора','model','auto','required')}${input('Лимит ответа, токенов','max_tokens',8192,'type="number" min="2048" max="16384" step="1024"')}<label class="check-label"><input type="checkbox" name="remember_key" checked>Запомнить доступ на этом устройстве</label><button class="primary">Подключить и проверить</button></form><p class="help">Задача, примеры и отчёты передаются провайдерам при генерации. OpenRouter использует только модели с нулевыми ценами. Для Groq и Gemini действует тариф вашего аккаунта.</p></details><section class="panel"><h2>Целевые модели для ручного испытания</h2><form id="target-form">${input('Название модели','model','','required maxlength="200" placeholder="Своя модель"')}${input('Версия или условия проверки','version','профиль')}${area('Наблюдения — необязательно','notes')}<button>Добавить модель</button></form>${state.targets.map(t=>`<div class="entry"><strong>${esc(t.title)}</strong><p class="help">${esc(t.version)}</p></div>`).join('')}</section>`;}
+
 
 function dataView(){return `<div class="grid"><section class="panel"><h2>Сохранение и перенос</h2><p>${temporary?'Записи находятся только в памяти текущей вкладки. Скачайте резервную копию перед закрытием или обновлением страницы.':'База примеров, промпты, фактические ответы и отчёты хранятся в браузере на этом устройстве.'}</p><button class="primary" data-export>Скачать резервную копию</button><p class="help">Скачайте копию перед очисткой данных браузера или сменой адреса сайта. Ключи API не экспортируются.</p><div class="divider"></div><form id="restore-form"><label>Резервная копия<input id="backup-file" type="file" accept=".json" required></label><label class="check-label"><input name="confirm_replace" type="checkbox" required>Заменить текущие данные выбранной копией</label><button>Восстановить</button></form><p class="help">Поддерживаются резервные копии предыдущих версий.</p></section><section class="panel"><h2>Один HTML для телефона</h2><ol><li>Замените index.html в корне своего репозитория.</li><li>GitHub Pages: main → /(root).</li><li>После публикации обновите страницу сайта.</li></ol><p>${temporary?'Сейчас включён временный режим: скачайте копию перед закрытием страницы.':'Промпты и отчёты остаются после обновления сайта при том же адресе и браузере.'}</p><button data-persist>Запросить постоянное хранение</button><p class="help">Этот HTML работает с телефона без сервера. Для ИИ-генерации нужен интернет и ключ. Локальный режим работает без API. Испытания в целевой модели проводятся вручную.</p></section></div>`;}
 const views={generator,seeds,history,settings,data:dataView};
@@ -1044,7 +1187,7 @@ async function backup(fromCache=false){let data;if(fromCache){const snapshot=eng
 async function next(c,channel){const result=await api('/api/simple/next',{campaign_id:c.id,revision:c.revision,channel:channel||(PromptLab.aiConfig(state)?'api':'local')});selectedCampaign=result.campaign_id;remember();await load();}
 function discard(formId){delete drafts[formId];remember();}
 document.addEventListener('input',event=>{dirty=true;capture(event.target.form);});
-document.addEventListener('change',event=>{capture(event.target.form);if(event.target.form?.id==='api-form'&&event.target.name==='provider'){const f=event.target.form;f.elements.namedItem('api_key').value='';f.elements.namedItem('model').value='auto';}toggleSetup();});
+document.addEventListener('change',async event=>{if(event.target.id==='model-connection'){try{await api('/api/ai/select',{id:event.target.value,model:'auto'});await load();}catch(error){handleError(error);}return;}capture(event.target.form);if(event.target.form?.id==='api-form'&&event.target.name==='provider'){const f=event.target.form;f.elements.namedItem('api_key').value='';f.elements.namedItem('model').value='auto';}toggleSetup();});
 document.addEventListener('keydown',event=>{if(event.key==='Escape')closeMenu();});
 document.addEventListener('click',async event=>{
  const exported=event.target.closest('[data-export]');if(exported){event.preventDefault();try{await backup();}catch(error){handleError(error);}return;}
@@ -1062,12 +1205,15 @@ document.addEventListener('click',async event=>{
   if(d.openCampaign){selectedCampaign=d.openCampaign;remember();go('generator');return;}
   if(d.copyJob){await copy(state.jobs.find(j=>j.id===d.copyJob).prompt);return;}
   if(d.copyRequest){const value=$('#task-'+d.copyRequest)?.elements?.namedItem('request')?.value;if(!value?.trim())throw Error('Сначала напишите запрос');await copy(value);return;}
+  if(d.copyDraft){const cp=state.jobs.find(j=>j.id===d.copyDraft)?.checkpoint;if(!cp?.design)throw Error('Черновик отсутствует');await copy(cp.design.prompt||cp.design.blocks.map(b=>b.text).join('\n\n'));return;}
   if(d.copyAttempt){await copy(state.attempts.find(a=>a.id===d.copyAttempt).prompt);return;}
   if(d.persist!==undefined){const ok=await navigator.storage?.persist?.();toast(ok?'Постоянное хранение предоставлено':'Браузер оставил обычный режим хранения');return;}
   button.disabled=true;
   if(d.resumeAi){await api('/api/ai/resume',{job_id:d.resumeAi});await load();return;}
-  if(d.refreshModels!==undefined){await api('/api/ai/models',{});await load();toast('Каталог обновлён');return;}
-  if(d.forgetKey){await api('/api/ai/forget',{provider:d.forgetKey});toast('Ключ удалён с устройства');return;}
+  if(d.refreshModels!==undefined){await api('/api/ai/models',{id:d.refreshModels||undefined});await load();toast('Каталог обновлён');return;}
+  if(d.pickModel!==undefined){await api('/api/ai/select',{id:d.connectionId,model:d.pickModel});await load();toast(d.pickModel==='auto'?'Включён автовыбор':'Выбрана модель: '+d.pickModel);return;}
+  if(d.toggleConnection||d.retryConnection){await api('/api/ai/toggle',{id:d.toggleConnection||d.retryConnection,retry:!!d.retryConnection});await load();return;}
+  if(d.forgetConnection){await api('/api/ai/forget',{id:d.forgetConnection});await load();toast('Ключ удалён с устройства');return;}
   if(d.toggleSeed){const seed=state.seeds.find(x=>x.id===d.toggleSeed);await api('/api/seeds/toggle',{seed_id:seed.id,revision:seed.revision});await load();return;}
   if(d.importSeeds!==undefined){const files=[...$('#seed-files').files];if(!files.length)throw Error('Выберите файлы');await api('/api/seeds/import',{files:await Promise.all(files.map(async f=>({name:f.name,content:await f.text()})))});await load();toast('Примеры добавлены');return;}
   if(d.startJob){await api('/api/jobs/start',{job_id:d.startJob});await load();return;}
@@ -1083,6 +1229,7 @@ document.addEventListener('submit',async event=>{
   if(form.id==='start-form'){data.channel=data.channel||(PromptLab.aiConfig(state)?'api':'local');if(!data.objective?.trim())throw Error('Опишите задачу, для которой нужен промпт');const result=await api('/api/simple/start',data);selectedCampaign=result.campaign_id;startExpanded=false;returnToTask=false;remember();message=data.channel==='api'?'Генерация запущена':result.paused?'Позиция поиска сохранена':'Новая структура собрана';}
   else if(form.dataset.form==='setup'||form.dataset.form==='task'){const a=state.attempts.find(x=>x.id===form.dataset.attempt);await api('/api/simple/'+form.dataset.form,{...data,attempt_id:a.id,revision:a.revision});}
   else if(form.id==='retry-form'){await next(current(),data.channel);discard(form.id);return;}
+  else if(form.id==='vault-form'){const result=await api('/api/ai/unlock',{passphrase:data.passphrase,remember_key:form.elements.namedItem('remember_key').checked});message='Разблокировано подключений: '+result.saved;}
   else if(form.id==='api-form'){await api('/api/ai/connect',{...data,remember_key:form.elements.namedItem('remember_key').checked});message='Подключение проверено, каталог загружен';}
   else if(form.id==='seed-form'){await api('/api/seeds',{...data,domains:data.domains.split(',').map(x=>x.trim()).filter(Boolean)});}
   else if(form.id==='target-form'){await api('/api/targets',{title:data.model,model:data.model,version:data.version,notes:data.notes,mode:'manual'});}
